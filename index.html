@@ -758,7 +758,12 @@ const speeds=[1,1.25,1.5,0.75]; let si=0;
 $("speedBtn").addEventListener("click", ()=>{ si=(si+1)%speeds.length; audio.playbackRate=speeds[si]; $("speedBtn").textContent=speeds[si]+"×"; });
 
 let scrollT;
-function pauseScroll(){ autoScroll=false; $("jumpback").style.display="flex"; clearTimeout(scrollT); }
+function pauseScroll(){
+  if($("player").style.display !== "block" || !segments.length) return;
+  autoScroll=false;
+  $("jumpback").style.display="flex";
+  clearTimeout(scrollT);
+}
 window.addEventListener("wheel", pauseScroll, {passive:true});
 window.addEventListener("touchmove", pauseScroll, {passive:true});
 $("jumpback").addEventListener("click", ()=>{ autoScroll=true; $("jumpback").style.display="none"; const a=document.querySelector(".seg.active"); if(a) a.scrollIntoView({behavior:"smooth",block:"center"}); });
