@@ -206,7 +206,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const CHUNK_TIMEOUT_MS = 90000;
+const CHUNK_TIMEOUT_MS = 180000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
 const CACHE_PREFIX = "tx_v7_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
@@ -404,14 +404,14 @@ function hideReprocess(){ $("reprocessBtn").style.display="none"; }
 
 // 把一批字幕送去翻譯（每 25 句一批）；report(text,pct) 負責回報進度
 async function translateSegs(segs, report, onBatch){
-  const target = $("lang").value, key = groqKey(), BATCH=10;
+  const target = $("lang").value, key = groqKey(), BATCH=6;
   for(let i=0;i<segs.length;i+=BATCH){
     const chunk = segs.slice(i,i+BATCH);
     report("翻譯中… "+Math.min(i+BATCH,segs.length)+" / "+segs.length+" 句", Math.round((i/segs.length)*100));
     let r, lastErr;
-    for(let attempt=0;attempt<3;attempt++){
-      try{ r = await api("/api/translate", {texts:chunk.map(s=>s.text), target, key}, 90000); break; }
-      catch(err){ lastErr=err; if(attempt<2) await new Promise(res=>setTimeout(res, 800*(attempt+1))); }
+    for(let attempt=0;attempt<4;attempt++){
+      try{ r = await api("/api/translate", {texts:chunk.map(s=>s.text), target, key}, 120000); break; }
+      catch(err){ lastErr=err; if(attempt<3) await new Promise(res=>setTimeout(res, 1200*(attempt+1))); }
     }
     if(!r) throw lastErr || new Error("翻譯失敗");
     chunk.forEach((s,j)=> s.trans = (r.t&&r.t[j])||"");
@@ -472,7 +472,7 @@ async function runJob(job, title, src, cacheKey){
     const report = (t)=>setMore(t);
     try{
       report("轉錄中… 第 "+(i+1)+" / "+job.count+" 段（語音轉文字）", Math.round((i/job.count)*100));
-      const r = await api("/api/job_chunk", {jobId:job.jobId, index:i, model, key, attempts:1}, CHUNK_TIMEOUT_MS);
+      const r = await api("/api/job_chunk", {jobId:job.jobId, index:i, model, key, attempts:2}, CHUNK_TIMEOUT_MS);
       if(myRun !== runId) return;
       let addedInThisChunk = 0;
       await translateSegs(r.segments, (t)=> report("第 "+(i+1)+"/"+job.count+" 段 · "+t,
@@ -573,7 +573,7 @@ async function retryFailedChunks(){
           index:i,
           model,
           key,
-          attempts:1,
+          attempts:2,
           splitFallback:true
         }, RETRY_CHUNK_TIMEOUT_MS);
       }catch(err){
@@ -587,7 +587,7 @@ async function retryFailedChunks(){
           index:i,
           model,
           key,
-          attempts:1,
+          attempts:2,
           splitFallback:true
         }, RETRY_CHUNK_TIMEOUT_MS);
       }
