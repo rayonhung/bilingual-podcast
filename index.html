@@ -208,6 +208,7 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 90000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
+const CACHE_PREFIX = "tx_v3_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 const apiGet = (path, timeoutMs=30000) => {
   const ctrl = new AbortController();
@@ -607,7 +608,7 @@ async function retryFailedChunks(){
 async function processEpisode(ep){
   hideErr();
   if(!(await ensureAccess())) return;
-  const cacheKey = "tx_v2_"+ep.audio+"_"+$("lang").value;
+  const cacheKey = CACHE_PREFIX+ep.audio+"_"+$("lang").value;
   activeCacheKey = cacheKey; currentTitle = ep.title; currentSrc = ep.audio; currentMode = "feed";
   try{
     const cached = localStorage.getItem(cacheKey);
@@ -640,7 +641,7 @@ async function handleFile(file){
   if(!(await ensureAccess())) return;
   if(file.size > 200*1024*1024){ showErr("這個檔超過 200 MB，太大了，先剪短一點。"); return; }
   if(file.size > 24*1024*1024 && !/\.mp3$/i.test(file.name)){ showErr("超過 24 MB 的檔目前只有 MP3 能自動切段，請改用 MP3。"); return; }
-  const cacheKey = "tx_v2_"+file.name+"_"+file.size+"_"+$("lang").value;
+  const cacheKey = CACHE_PREFIX+file.name+"_"+file.size+"_"+$("lang").value;
   const url = URL.createObjectURL(file);
   activeCacheKey = cacheKey; currentTitle = file.name; currentSrc = ""; currentMode = "file";
   try{
@@ -687,6 +688,9 @@ function startPlayer(name, src, source){
 }
 
 // 把新的一批字幕加進畫面（沿用全域 segments 的索引，timeupdate 才對得上）
+function normSegText(text){
+  return (text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
 function appendSegments(segs){
   const cont = $("lines");
   if(!cont) return 0;
@@ -694,7 +698,12 @@ function appendSegments(segs){
   if(loading) loading.remove();
   let added = 0;
   segs.forEach(s=>{
-    const exists = segments.some(x => Math.abs(x.start-s.start) < 0.02 && x.text === s.text);
+    const nt = normSegText(s.text);
+    const exists = segments.some(x => {
+      const xt = normSegText(x.text);
+      return (Math.abs(x.start-s.start) < 4 && nt && xt && nt === xt) ||
+             (Math.abs(x.start-s.start) < 1 && x.text === s.text);
+    });
     if(!exists){ segments.push(s); added++; }
   });
   segments.sort((a,b)=>a.start-b.start);
