@@ -120,11 +120,11 @@
       </div>
       <div id="appPasswordBox" style="display:none">
         <label for="appPassword">App 密碼</label>
-        <div class="feedrow">
+        <div class="feedrow" id="appPasswordFields">
           <input type="password" id="appPassword" placeholder="輸入站台密碼" autocomplete="current-password">
           <button class="btn-primary" id="unlockBtn">解鎖</button>
         </div>
-        <div class="hint">這個站台使用伺服器端 Groq key；輸入密碼後即可使用。</div>
+        <div class="hint" id="appPasswordHint">這個站台使用伺服器端 Groq key；輸入密碼後即可使用。</div>
         <div class="hint" id="authStatus"></div>
       </div>
     </div>
@@ -237,7 +237,12 @@ async function loadConfig(){
     appConfig = {serverKey:false, passwordRequired:false, authed:false};
   }
   $("groqKeyBox").style.display = appConfig.serverKey ? "none" : "block";
-  $("appPasswordBox").style.display = appConfig.serverKey && appConfig.passwordRequired && !appConfig.authed ? "block" : "none";
+  $("appPasswordBox").style.display = appConfig.serverKey && appConfig.passwordRequired ? "block" : "none";
+  $("appPasswordFields").style.display = appConfig.authed ? "none" : "flex";
+  $("appPasswordHint").textContent = appConfig.authed
+    ? "已解鎖，可以直接讀取 RSS 或上傳 MP3。"
+    : "這個站台使用伺服器端 Groq key；輸入密碼後即可使用。";
+  setAuthStatus(appConfig.authed ? "密碼正確，已解鎖。" : "", false);
   $("credTitle").textContent = appConfig.serverKey ? "使用權限" : "金鑰";
 }
 loadConfig();
@@ -271,9 +276,10 @@ async function unlockApp(){
   try{
     await api("/api/auth", {appPassword}, 30000);
     appConfig.authed = true;
-    $("appPasswordBox").style.display = "none";
-    showErr("密碼正確，已解鎖。");
-    setTimeout(hideErr, 1800);
+    $("appPasswordBox").style.display = "block";
+    $("appPasswordFields").style.display = "none";
+    $("appPasswordHint").textContent = "已解鎖，可以直接讀取 RSS 或上傳 MP3。";
+    setAuthStatus("密碼正確，已解鎖。", false);
     return true;
   }catch(err){
     setAuthStatus(err.message, true);
@@ -423,6 +429,17 @@ function persist(cacheKey){
   }catch(e){}
 }
 
+function pruneResolvedFailures(job=activeJob){
+  if(!job || !Array.isArray(job.starts) || !failedChunks.length || !segments.length) return 0;
+  const before = failedChunks.length;
+  failedChunks = failedChunks.filter(i => {
+    const start = Number(job.starts[i] || 0);
+    const end = Number(job.starts[i + 1] || Infinity);
+    return !segments.some(s => s.start >= start - 0.25 && s.start < end - 0.25);
+  });
+  return before - failedChunks.length;
+}
+
 function restoreCached(raw, title, src, cacheKey){
   const data = JSON.parse(raw);
   const segs = Array.isArray(data) ? data : (data.segments || []);
@@ -434,6 +451,7 @@ function restoreCached(raw, title, src, cacheKey){
   }else{
     activeJob = data.job || null;
     failedChunks = data.failedChunks || [];
+    if(pruneResolvedFailures(activeJob)) persist(activeCacheKey);
     if(activeJob && failedChunks.length){
       showRetry("上次有 "+failedChunks.length+" 段失敗 · 點此只重試失敗段落");
     }
@@ -483,6 +501,13 @@ async function runJob(job, title, src, cacheKey){
     setMore("");
     $("srcnote").textContent = "字幕來源：AI 轉錄（共 "+job.count+" 段）";
   }else{
+    pruneResolvedFailures(job);
+    if(!failedChunks.length){
+      persist(cacheKey);
+      setMore("");
+      $("srcnote").textContent = "字幕來源：AI 轉錄（共 "+job.count+" 段）";
+      return;
+    }
     showRetry("完成，但有 "+failedChunks.length+" 段失敗 · 點此只重試失敗段落");
     persist(cacheKey);
     $("srcnote").textContent = "字幕來源：AI 轉錄";
@@ -523,6 +548,13 @@ async function refreshJobForRetry(){
 
 async function retryFailedChunks(){
   if(!activeJob || !failedChunks.length) return;
+  if(pruneResolvedFailures(activeJob)){
+    persist(activeCacheKey);
+    if(!failedChunks.length){
+      setMore("");
+      return;
+    }
+  }
   const retrying = [...failedChunks];
   failedChunks = [];
   hideRetry();
