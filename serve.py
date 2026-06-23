@@ -102,7 +102,17 @@ def ts_to_sec(ts):
 # ----------------------------------------------------------------------------
 import xml.etree.ElementTree as ET
 
-def parse_feed(xml_bytes):
+def normalize_url(url, base=None):
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    if base:
+        return urllib.parse.urljoin(base, url)
+    return url
+
+def parse_feed(xml_bytes, base_url=None):
     root = ET.fromstring(xml_bytes)
     show = ""
     for el in root.iter():
@@ -125,7 +135,7 @@ def parse_feed(xml_bytes):
                 u = ch.get("url")
                 ty = (ch.get("type") or "")
                 if u and ("audio" in ty or u.lower().split("?")[0].endswith((".mp3", ".m4a", ".aac", ".ogg", ".wav"))):
-                    audio = u
+                    audio = normalize_url(u, base_url)
             elif ln == "transcript" and "podcastindex.org/namespace" in ch.tag:
                 u = ch.get("url")
                 ty = (ch.get("type") or "").lower()
@@ -134,7 +144,7 @@ def parse_feed(xml_bytes):
                 score = {"application/json": 3, "application/x-subrip": 2,
                          "application/srt": 2, "text/srt": 2, "text/vtt": 1}.get(ty, 0)
                 if best is None or score > best[2]:
-                    best = (u, ty, score)
+                    best = (normalize_url(u, base_url), ty, score)
         if audio:
             episodes.append({
                 "title": title or "(未命名)",
@@ -751,7 +761,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_auth_cookie()
             if route == "/api/feed":
                 self._require_auth(data)
-                self._send(200, parse_feed(http_get(data["feedUrl"], accept="application/rss+xml,application/xml,text/xml,*/*")))
+                self._send(200, parse_feed(http_get(data["feedUrl"], accept="application/rss+xml,application/xml,text/xml,*/*"),
+                                           data.get("feedUrl")))
             elif route == "/api/transcript":
                 self._require_auth(data)
                 self._send(200, {"segments": fetch_transcript(data["url"], data.get("type"))})

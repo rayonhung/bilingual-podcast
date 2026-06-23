@@ -208,7 +208,7 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 90000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
-const CACHE_PREFIX = "tx_v6_";
+const CACHE_PREFIX = "tx_v7_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 const apiGet = (path, timeoutMs=30000) => {
   const ctrl = new AbortController();
@@ -608,6 +608,7 @@ async function retryFailedChunks(){
 async function processEpisode(ep){
   hideErr();
   if(!(await ensureAccess())) return;
+  ep = {...ep, audio:absoluteUrl(ep.audio), transcript:absoluteUrl(ep.transcript)};
   const cacheKey = CACHE_PREFIX+ep.audio+"_"+$("lang").value;
   activeCacheKey = cacheKey; currentTitle = ep.title; currentSrc = ep.audio; currentMode = "feed";
   try{
@@ -659,8 +660,16 @@ async function handleFile(file){
 // ---------- player ----------
 function fmt(s){ s=Math.max(0,s|0); return (s/60|0)+":"+String(s%60).padStart(2,"0"); }
 function audioSrc(src){
+  src = absoluteUrl(src);
   if(/^https?:\/\//i.test(src)) return "/api/audio?url=" + encodeURIComponent(src);
   return src;
+}
+
+function absoluteUrl(url){
+  if(!url) return "";
+  if(url.startsWith("//")) return "https:" + url;
+  try{ return new URL(url, location.href).href; }
+  catch(e){ return url; }
 }
 
 // 開啟播放器並備好一個空的字幕容器（內容由 appendSegments 逐段加入）
