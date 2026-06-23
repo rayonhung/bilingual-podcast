@@ -35,9 +35,8 @@ python3 serve.py
 
 ## 主要功能與設計
 
-- **長音檔自動切段**：超過 Groq 25MB 上限的 MP3，會依 MP3 frame 邊界自動切成多段
-  （每段 < 20MB），逐段轉錄後把字幕時間軸準確接回去。純 Python、不需 ffmpeg。
-  （目前自動切段僅支援 MP3；其他格式的超大檔請先剪短。）
+- **長音檔自動切段**：部署環境會用 ffmpeg 依時間切段並保留重疊，降低段落邊界漏字；
+  沒有 ffmpeg 時會退回純 Python 的 MP3 frame 切段。
 - **暫時性錯誤自動重試**：Groq 偶發的 429 / 5xx（過載、`service_unavailable`）會以
   指數退避（1、2、4、8 秒）重試最多 5 次；像 401（金鑰錯）這種非暫時性錯誤則直接回報。
 - **被擋時用 curl 後援**：來源網站或 API 回 403／406／429 時，改用 curl 重抓。
@@ -73,11 +72,11 @@ python3 serve.py
 
 以 Render 為例：
 
-1. 把 `serve.py` + `index.html` 放進一個 GitHub repo。
+1. 把 `serve.py` + `index.html` + `Aptfile` 放進一個 GitHub repo。
 2. Render → New → **Web Service** → 連這個 repo。
 3. 設定：
    - Runtime：**Python 3**
-   - Build Command：`true`（沒有套件要裝，只讓 build 階段通過）
+   - Build Command：`true`（Python 沒有套件要裝；Render 會依 `Aptfile` 安裝 ffmpeg）
    - Start Command：`python3 serve.py`
 4. 部署完會給你一個 `https://你的名字.onrender.com` 公開網址。
 

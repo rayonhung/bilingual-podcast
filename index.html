@@ -208,7 +208,7 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 90000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
-const CACHE_PREFIX = "tx_v4_";
+const CACHE_PREFIX = "tx_v5_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 const apiGet = (path, timeoutMs=30000) => {
   const ctrl = new AbortController();

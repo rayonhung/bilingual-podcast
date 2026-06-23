@@ -13,7 +13,7 @@
 只需要 Python 3，不必安裝任何套件。
 """
 
-import json, os, re, sys, time, base64, hashlib, threading, webbrowser, urllib.request, urllib.error, urllib.parse, subprocess, tempfile
+import json, os, re, sys, time, base64, hashlib, threading, webbrowser, urllib.request, urllib.error, urllib.parse, subprocess, tempfile, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8000
@@ -51,6 +51,9 @@ def curl_bytes(url, timeout=120, headers=None):
         raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or
                            "curl 下載失敗（exit %s）" % p.returncode)
     return p.stdout
+
+def has_cmd(name):
+    return shutil.which(name) is not None
 
 def auth_token():
     if not APP_PASSWORD:
@@ -322,6 +325,54 @@ def mp3_chunks(data, max_bytes, max_seconds=None, first_max_seconds=None, overla
         chunks.append((data[cur_start:i], elapsed))
     return chunks or None
 
+def ffmpeg_duration(path):
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", path],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode:
+        raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffprobe failed")
+    return float(p.stdout.decode("utf-8", "replace").strip())
+
+def ffmpeg_chunks(audio_bytes, filename, max_seconds=None, first_max_seconds=None, overlap_seconds=0):
+    """
+    用 ffmpeg 依真正時間切段並重編碼，避開 podcast MP3 metadata / VBR / frame parser 造成的開頭偏移。
+    回傳 [(chunk_bytes, start_time_sec), ...]；沒有 ffmpeg/ffprobe 或切段失敗就回 None。
+    """
+    if not (has_cmd("ffmpeg") and has_cmd("ffprobe")):
+        return None
+    suffix = os.path.splitext(filename.split("?")[0])[1] or ".mp3"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "source" + suffix)
+            with open(src, "wb") as f:
+                f.write(audio_bytes)
+            total = ffmpeg_duration(src)
+            if not total or total <= 0:
+                return None
+            chunks = []
+            start = 0.0
+            idx = 0
+            while start < total - 0.1:
+                limit = first_max_seconds if idx == 0 and first_max_seconds is not None else max_seconds
+                dur = min(limit or total, total - start)
+                out = os.path.join(td, "chunk_%03d.mp3" % idx)
+                args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-ss", "%.3f" % start, "-t", "%.3f" % dur, "-i", src,
+                        "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", out]
+                p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if p.returncode:
+                    raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")
+                with open(out, "rb") as f:
+                    chunks.append((f.read(), start))
+                if start + dur >= total:
+                    break
+                start = max(0.0, start + dur - overlap_seconds)
+                idx += 1
+            return chunks or None
+    except Exception as e:
+        print("[job] ffmpeg 切段失敗，改用 MP3 frame fallback：%s" % e, flush=True)
+        return None
+
 # ----------------------------------------------------------------------------
 # Groq：轉錄 + 翻譯
 # ----------------------------------------------------------------------------
@@ -344,12 +395,15 @@ def _urlopen_retry(req, timeout, attempts=5):
                 continue
             raise
 
-def split_audio(audio_bytes):
+def split_audio(audio_bytes, filename="audio.mp3"):
     """把音檔切成 [(bytes, start_sec), ...]。
 
-    能解析 MP3 frame 時一律按時間切，讓低碼率長音檔也能逐段交付。
-    解析不到 MP3 frame 的小檔才維持單段；大檔解析不到則交給呼叫端報錯。
+    雲端部署時優先用 ffmpeg 依真正時間切段，避免 podcast MP3 metadata / VBR 造成開頭偏移。
+    沒有 ffmpeg 時才退回純 Python MP3 frame 切段。
     """
+    chunks = ffmpeg_chunks(audio_bytes, filename, CHUNK_SECONDS, FIRST_CHUNK_SECONDS, CHUNK_OVERLAP_SECONDS)
+    if chunks:
+        return chunks
     chunks = mp3_chunks(audio_bytes, CHUNK_BYTES, CHUNK_SECONDS, FIRST_CHUNK_SECONDS, CHUNK_OVERLAP_SECONDS)
     if chunks:
         return chunks
@@ -362,7 +416,7 @@ def groq_transcribe(audio_bytes, filename, model, key):
     if len(audio_bytes) <= MAX_AUDIO:
         return _transcribe_one(audio_bytes, filename, model, key)
     # 超過上限：照 MP3 frame 邊界自動切段，逐段轉錄，再把時間軸接回去
-    chunks = split_audio(audio_bytes)
+    chunks = split_audio(audio_bytes, filename)
     if not chunks:
         raise ValueError("這集音檔超過 25MB，又不是能自動切段的 MP3 格式。"
                          "請改用 MP3，或先剪成短一點的片段。")
@@ -521,7 +575,7 @@ def job_start(data):
         audio = http_get(data["audioUrl"], timeout=600, accept="audio/*,application/octet-stream,*/*")
         name = data["audioUrl"].split("?")[0].split("/")[-1] or "audio.mp3"
     print("[job] 已下載 %.1f MB，開始切段…" % (len(audio) / 1024 / 1024), flush=True)
-    chunks = split_audio(audio)
+    chunks = split_audio(audio, name)
     if not chunks:
         raise ValueError("這集音檔超過 25MB，又不是能自動切段的 MP3 格式。請改用 MP3，或先剪成短一點的片段。")
     print("[job] 切成 %d 段，準備逐段轉錄" % len(chunks), flush=True)
