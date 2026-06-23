@@ -716,7 +716,7 @@ function renderSegments(){
   });
 }
 
-const playBtn=$("playBtn"), playIcon=$("playIcon");
+const playBtn=$("playBtn"), playIconPath=document.querySelector("#playIcon path");
 const ICON_PLAY='M8 5v14l11-7z', ICON_PAUSE='M6 5h4v14H6zM14 5h4v14h-4z';
 playBtn.addEventListener("click", async ()=>{
   if(!segments.length){
@@ -730,8 +730,8 @@ playBtn.addEventListener("click", async ()=>{
     audio.pause();
   }
 });
-audio.addEventListener("play", ()=> playIcon.setAttribute("d",ICON_PAUSE));
-audio.addEventListener("pause", ()=> playIcon.setAttribute("d",ICON_PLAY));
+audio.addEventListener("play", ()=> playIconPath.setAttribute("d",ICON_PAUSE));
+audio.addEventListener("pause", ()=> playIconPath.setAttribute("d",ICON_PLAY));
 audio.addEventListener("loadedmetadata", ()=> $("dur").textContent=Number.isFinite(audio.duration)?fmt(audio.duration):"直播");
 audio.addEventListener("canplay", ()=> { if($("more").textContent.startsWith("音訊還沒載入")) setMore(""); });
 audio.addEventListener("error", ()=>{
