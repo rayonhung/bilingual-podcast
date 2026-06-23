@@ -112,10 +112,17 @@
   <!-- SETUP -->
   <div id="setup">
     <div class="panel">
-      <h2>金鑰</h2>
-      <label for="key">Groq API 金鑰</label>
-      <input type="password" id="key" placeholder="gsk_..." autocomplete="off">
-      <div class="hint">免費申請：<a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a> → Create API Key。只存在你這台電腦。</div>
+      <h2 id="credTitle">金鑰</h2>
+      <div id="groqKeyBox">
+        <label for="key">Groq API 金鑰</label>
+        <input type="password" id="key" placeholder="gsk_..." autocomplete="off">
+        <div class="hint">免費申請：<a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a> → Create API Key。只存在你這台電腦。</div>
+      </div>
+      <div id="appPasswordBox" style="display:none">
+        <label for="appPassword">App 密碼</label>
+        <input type="password" id="appPassword" placeholder="輸入站台密碼" autocomplete="current-password">
+        <div class="hint">這個站台使用伺服器端 Groq key；輸入密碼後即可使用。</div>
+      </div>
     </div>
 
     <div class="panel">
@@ -197,10 +204,18 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 90000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
+let appConfig = {serverKey:false, passwordRequired:false, authed:false};
+const apiGet = (path, timeoutMs=30000) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
+  return fetch(path, {signal:ctrl.signal, credentials:"same-origin"})
+    .then(async r => { const j = await r.json(); if(!r.ok) throw new Error(j.error||("HTTP "+r.status)); return j; })
+    .finally(()=>clearTimeout(timer));
+};
 const api = (path, body, timeoutMs=120000) => {
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
-  return fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:ctrl.signal})
+  return fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:ctrl.signal, credentials:"same-origin"})
     .then(async r => { const j = await r.json(); if(!r.ok) throw new Error(j.error||("HTTP "+r.status)); return j; })
     .catch(err => { if(err.name==="AbortError") throw new Error("請求逾時，稍後可重試這一段。"); throw err; })
     .finally(()=>clearTimeout(timer));
@@ -210,6 +225,18 @@ const api = (path, body, timeoutMs=120000) => {
 const savedKey = localStorage.getItem("groq_key");
 if(savedKey) $("key").value = savedKey;
 $("key").addEventListener("change", () => localStorage.setItem("groq_key", $("key").value.trim()));
+
+async function loadConfig(){
+  try{
+    appConfig = await apiGet("/api/config");
+  }catch(e){
+    appConfig = {serverKey:false, passwordRequired:false, authed:false};
+  }
+  $("groqKeyBox").style.display = appConfig.serverKey ? "none" : "block";
+  $("appPasswordBox").style.display = appConfig.serverKey && appConfig.passwordRequired && !appConfig.authed ? "block" : "none";
+  $("credTitle").textContent = appConfig.serverKey ? "使用權限" : "金鑰";
+}
+loadConfig();
 
 // tabs
 $("tabFeed").addEventListener("click", () => switchTab("feed"));
@@ -223,7 +250,26 @@ function switchTab(which){
 
 function showErr(m){ const e=$("err"); e.textContent=m; e.style.display="block"; }
 function hideErr(){ $("err").style.display="none"; }
-function keyOK(){ const k=$("key").value.trim(); if(!k){ showErr("先貼上 Groq 金鑰。"); return false; } return true; }
+function groqKey(){ return appConfig.serverKey ? "" : $("key").value.trim(); }
+async function ensureAccess(){
+  if(appConfig.serverKey){
+    if(!appConfig.passwordRequired || appConfig.authed) return true;
+    const appPassword = $("appPassword").value.trim();
+    if(!appPassword){ showErr("先輸入 App 密碼。"); return false; }
+    try{
+      await api("/api/auth", {appPassword}, 30000);
+      appConfig.authed = true;
+      $("appPasswordBox").style.display = "none";
+      return true;
+    }catch(err){
+      showErr(err.message);
+      return false;
+    }
+  }
+  const k=$("key").value.trim();
+  if(!k){ showErr("先貼上 Groq 金鑰。"); return false; }
+  return true;
+}
 
 // ---------- feed ----------
 $("loadFeed").addEventListener("click", loadFeed);
@@ -231,6 +277,7 @@ $("feedUrl").addEventListener("keydown", e => { if(e.key==="Enter") loadFeed(); 
 
 async function loadFeed(){
   hideErr();
+  if(!(await ensureAccess())) return;
   const url = $("feedUrl").value.trim();
   if(!url){ showErr("貼上 RSS feed 網址。"); return; }
   $("loadFeed").disabled = true; $("loadFeed").textContent = "讀取中…";
@@ -326,7 +373,7 @@ function hideReprocess(){ $("reprocessBtn").style.display="none"; }
 
 // 把一批字幕送去翻譯（每 25 句一批）；report(text,pct) 負責回報進度
 async function translateSegs(segs, report, onBatch){
-  const target = $("lang").value, key = $("key").value.trim(), BATCH=10;
+  const target = $("lang").value, key = groqKey(), BATCH=10;
   for(let i=0;i<segs.length;i+=BATCH){
     const chunk = segs.slice(i,i+BATCH);
     report("翻譯中… "+Math.min(i+BATCH,segs.length)+" / "+segs.length+" 句", Math.round((i/segs.length)*100));
@@ -371,7 +418,7 @@ function restoreCached(raw, title, src, cacheKey){
 
 // 逐段交付：第一段好了就開播放器，其餘段在背景補上
 async function runJob(job, title, src, cacheKey){
-  const key=$("key").value.trim(), model=$("quality").value;
+  const key=groqKey(), model=$("quality").value;
   const myRun = ++runId;
   activeJob = job; activeCacheKey = cacheKey; failedChunks = []; hideRetry();
   startPlayer(title, src, "AI 轉錄（背景處理中…）");
@@ -428,7 +475,7 @@ async function reprocessCurrent(){
   hideRetry(); hideReprocess();
   try{
     setStatus("準備音檔…（重新處理）", null);
-    const job = await api("/api/job_start", {audioUrl:currentSrc, model:$("quality").value, key:$("key").value.trim()});
+    const job = await api("/api/job_start", {audioUrl:currentSrc, model:$("quality").value, key:groqKey()});
     await runJob(job, currentTitle || "Podcast", currentSrc, activeCacheKey);
   }catch(err){
     backToSetup();
@@ -444,7 +491,7 @@ async function refreshJobForRetry(){
   const job = await api("/api/job_start", {
     audioUrl:currentSrc,
     model:$("quality").value,
-    key:$("key").value.trim()
+    key:groqKey()
   }, 600000);
   activeJob = job;
   return job;
@@ -455,7 +502,7 @@ async function retryFailedChunks(){
   const retrying = [...failedChunks];
   failedChunks = [];
   hideRetry();
-  const key=$("key").value.trim(), model=$("quality").value;
+  const key=groqKey(), model=$("quality").value;
   let refreshedJob = false;
   for(let n=0;n<retrying.length;n++){
     const i = retrying[n];
@@ -503,7 +550,7 @@ async function retryFailedChunks(){
 
 async function processEpisode(ep){
   hideErr();
-  if(!keyOK()) return;
+  if(!(await ensureAccess())) return;
   const cacheKey = "tx_v2_"+ep.audio+"_"+$("lang").value;
   activeCacheKey = cacheKey; currentTitle = ep.title; currentSrc = ep.audio; currentMode = "feed";
   try{
@@ -526,7 +573,7 @@ async function processEpisode(ep){
     }else{
       // 需轉錄：下載＋切段，再逐段交付
       setStatus("準備音檔…（下載＋分段）", null);
-      const job = await api("/api/job_start", {audioUrl:ep.audio, model:$("quality").value, key:$("key").value.trim()});
+      const job = await api("/api/job_start", {audioUrl:ep.audio, model:$("quality").value, key:groqKey()});
       await runJob(job, ep.title, ep.audio, cacheKey);
     }
   }catch(err){ backToSetup(); showErr(err.message); }
@@ -534,7 +581,7 @@ async function processEpisode(ep){
 
 async function handleFile(file){
   hideErr();
-  if(!keyOK()) return;
+  if(!(await ensureAccess())) return;
   if(file.size > 200*1024*1024){ showErr("這個檔超過 200 MB，太大了，先剪短一點。"); return; }
   if(file.size > 24*1024*1024 && !/\.mp3$/i.test(file.name)){ showErr("超過 24 MB 的檔目前只有 MP3 能自動切段，請改用 MP3。"); return; }
   const cacheKey = "tx_v2_"+file.name+"_"+file.size+"_"+$("lang").value;
@@ -547,7 +594,7 @@ async function handleFile(file){
   try{
     setStatus("準備音檔…（上傳＋分段）", null);
     const b64 = await readAsB64(file);
-    const job = await api("/api/job_start", {audioB64:b64, filename:file.name, model:$("quality").value, key:$("key").value.trim()});
+    const job = await api("/api/job_start", {audioB64:b64, filename:file.name, model:$("quality").value, key:groqKey()});
     await runJob(job, file.name, url, cacheKey);
   }catch(err){ backToSetup(); showErr(err.message); }
 }

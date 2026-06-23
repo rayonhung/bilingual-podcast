@@ -19,6 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = 8000
 HERE = os.path.dirname(os.path.abspath(__file__))
 GROQ = "https://api.groq.com/openai/v1"
+SERVER_GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+APP_COOKIE = "bpp_auth"
 PODNS = "podcastindex.org/namespace"          # 用 localname 比對，不綁完整命名空間
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -47,6 +50,19 @@ def curl_bytes(url, timeout=120, headers=None):
         raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or
                            "curl 下載失敗（exit %s）" % p.returncode)
     return p.stdout
+
+def auth_token():
+    if not APP_PASSWORD:
+        return ""
+    return hashlib.sha256(("bpp-auth|" + APP_PASSWORD).encode("utf-8")).hexdigest()
+
+def parse_cookies(header):
+    out = {}
+    for part in (header or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
 
 def http_get(url, timeout=120, accept=None):
     headers = {
@@ -548,6 +564,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_auth_cookie(self):
+        body = json.dumps({"ok": True}, ensure_ascii=False).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Set-Cookie", "%s=%s; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly" %
+                         (APP_COOKIE, auth_token()))
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authed(self, data=None):
+        if not APP_PASSWORD:
+            return True
+        cookies = parse_cookies(self.headers.get("Cookie"))
+        if cookies.get(APP_COOKIE) == auth_token():
+            return True
+        return bool(data and data.get("appPassword") == APP_PASSWORD)
+
+    def _require_auth(self, data=None):
+        if self._authed(data):
+            return
+        raise PermissionError("請先輸入 App 密碼。")
+
+    def _groq_key(self, data):
+        if SERVER_GROQ_KEY:
+            return SERVER_GROQ_KEY
+        key = (data.get("key") or "").strip()
+        if not key:
+            raise ValueError("先貼上 Groq 金鑰。")
+        return key
+
     def _proxy_audio(self, url):
         headers = {
             "User-Agent": UA,
@@ -594,7 +643,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, f.read(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 self._send(500, "找不到 index.html，請確認它和 serve.py 在同一個資料夾。", "text/plain; charset=utf-8")
+        elif path == "/api/config":
+            self._send(200, {"serverKey": bool(SERVER_GROQ_KEY),
+                             "passwordRequired": bool(APP_PASSWORD),
+                             "authed": self._authed()})
         elif path == "/api/audio":
+            if APP_PASSWORD and not self._authed():
+                return self._send(401, {"error": "請先輸入 App 密碼。"})
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             url = (qs.get("url") or [""])[0]
             if not url.startswith(("http://", "https://")):
@@ -617,26 +672,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "壞掉的請求內容"})
         try:
             route = self.path.split("?")[0]
+            if route == "/api/auth":
+                if not APP_PASSWORD:
+                    return self._send(200, {"ok": True})
+                if data.get("appPassword") != APP_PASSWORD:
+                    return self._send(401, {"error": "App 密碼不正確。"})
+                return self._send_auth_cookie()
             if route == "/api/feed":
+                self._require_auth(data)
                 self._send(200, parse_feed(http_get(data["feedUrl"], accept="application/rss+xml,application/xml,text/xml,*/*")))
             elif route == "/api/transcript":
+                self._require_auth(data)
                 self._send(200, {"segments": fetch_transcript(data["url"], data.get("type"))})
             elif route == "/api/transcribe":
+                self._require_auth(data)
                 audio = http_get(data["audioUrl"], timeout=600, accept="audio/*,application/octet-stream,*/*")
                 name = data["audioUrl"].split("?")[0].split("/")[-1] or "audio.mp3"
-                self._send(200, {"segments": groq_transcribe(audio, name, data["model"], data["key"])})
+                self._send(200, {"segments": groq_transcribe(audio, name, data["model"], self._groq_key(data))})
             elif route == "/api/transcribe_upload":
+                self._require_auth(data)
                 audio = base64.b64decode(data["audioB64"])
                 self._send(200, {"segments": groq_transcribe(audio, data.get("filename", "audio.mp3"),
-                                                             data["model"], data["key"])})
+                                                             data["model"], self._groq_key(data))})
             elif route == "/api/job_start":
+                self._require_auth(data)
                 self._send(200, job_start(data))
             elif route == "/api/job_chunk":
+                self._require_auth(data)
+                data["key"] = self._groq_key(data)
                 self._send(200, job_chunk(data))
             elif route == "/api/translate":
-                self._send(200, {"t": groq_translate(data["texts"], data["target"], data["key"])})
+                self._require_auth(data)
+                self._send(200, {"t": groq_translate(data["texts"], data["target"], self._groq_key(data))})
             else:
                 self._send(404, {"error": "unknown endpoint"})
+        except PermissionError as e:
+            self._send(401, {"error": str(e)})
         except urllib.error.HTTPError as e:
             where = "上游服務"
             if self.path.startswith("/api/feed"):

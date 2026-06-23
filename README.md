@@ -77,13 +77,19 @@ python3 serve.py
 2. Render → New → **Web Service** → 連這個 repo。
 3. 設定：
    - Runtime：**Python 3**
-   - Build Command：留空（沒有套件要裝）
+   - Build Command：`true`（沒有套件要裝，只讓 build 階段通過）
    - Start Command：`python3 serve.py`
 4. 部署完會給你一個 `https://你的名字.onrender.com` 公開網址。
 
 `serve.py` 已經做好部署準備：偵測到平台的 `PORT` 環境變數時，會自動綁 `0.0.0.0`、
 不開瀏覽器、也不會去砍其他程序。
 
-> 安全性：金鑰是每個使用者自己在瀏覽器輸入、隨請求帶上的，伺服器本身沒有任何密鑰，
-> 所以公開部署不會外洩你的 Groq 額度。但它等於開了一個「能幫人下載 URL + 呼叫 Groq」
-> 的公開代理；若要擋外人，可再自行加一層密碼。
+若想讓使用者不用輸入 Groq key，可以在 Render 的 **Environment Variables** 設：
+
+| 變數 | 用途 |
+|------|------|
+| `GROQ_API_KEY` | 伺服器端 Groq API key；設了之後前端不再要求使用者輸入 key |
+| `APP_PASSWORD` | 站台密碼；建議和 `GROQ_API_KEY` 一起設，避免公開網址被陌生人消耗額度 |
+
+> 安全性：不設 `GROQ_API_KEY` 時，維持原本模式，金鑰由每個使用者自己在瀏覽器輸入。
+> 設了 `GROQ_API_KEY` 時，請務必也設 `APP_PASSWORD`，否則任何知道網址的人都能消耗你的 Groq 額度。
