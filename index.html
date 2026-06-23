@@ -120,8 +120,12 @@
       </div>
       <div id="appPasswordBox" style="display:none">
         <label for="appPassword">App 密碼</label>
-        <input type="password" id="appPassword" placeholder="輸入站台密碼" autocomplete="current-password">
+        <div class="feedrow">
+          <input type="password" id="appPassword" placeholder="輸入站台密碼" autocomplete="current-password">
+          <button class="btn-primary" id="unlockBtn">解鎖</button>
+        </div>
         <div class="hint">這個站台使用伺服器端 Groq key；輸入密碼後即可使用。</div>
+        <div class="hint" id="authStatus"></div>
       </div>
     </div>
 
@@ -251,25 +255,45 @@ function switchTab(which){
 function showErr(m){ const e=$("err"); e.textContent=m; e.style.display="block"; }
 function hideErr(){ $("err").style.display="none"; }
 function groqKey(){ return appConfig.serverKey ? "" : $("key").value.trim(); }
+function setAuthStatus(text, isError){
+  const s = $("authStatus");
+  s.textContent = text || "";
+  s.style.color = isError ? "var(--warn)" : "var(--accent)";
+}
+async function unlockApp(){
+  hideErr();
+  if(!appConfig.serverKey || !appConfig.passwordRequired || appConfig.authed) return true;
+  const appPassword = $("appPassword").value.trim();
+  if(!appPassword){ setAuthStatus("先輸入 App 密碼。", true); return false; }
+  $("unlockBtn").disabled = true;
+  $("unlockBtn").textContent = "驗證中…";
+  setAuthStatus("");
+  try{
+    await api("/api/auth", {appPassword}, 30000);
+    appConfig.authed = true;
+    $("appPasswordBox").style.display = "none";
+    showErr("密碼正確，已解鎖。");
+    setTimeout(hideErr, 1800);
+    return true;
+  }catch(err){
+    setAuthStatus(err.message, true);
+    return false;
+  }finally{
+    $("unlockBtn").disabled = false;
+    $("unlockBtn").textContent = "解鎖";
+  }
+}
 async function ensureAccess(){
   if(appConfig.serverKey){
     if(!appConfig.passwordRequired || appConfig.authed) return true;
-    const appPassword = $("appPassword").value.trim();
-    if(!appPassword){ showErr("先輸入 App 密碼。"); return false; }
-    try{
-      await api("/api/auth", {appPassword}, 30000);
-      appConfig.authed = true;
-      $("appPasswordBox").style.display = "none";
-      return true;
-    }catch(err){
-      showErr(err.message);
-      return false;
-    }
+    return unlockApp();
   }
   const k=$("key").value.trim();
   if(!k){ showErr("先貼上 Groq 金鑰。"); return false; }
   return true;
 }
+$("unlockBtn").addEventListener("click", unlockApp);
+$("appPassword").addEventListener("keydown", e => { if(e.key==="Enter") unlockApp(); });
 
 // ---------- feed ----------
 $("loadFeed").addEventListener("click", loadFeed);
