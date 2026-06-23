@@ -28,7 +28,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 MAX_AUDIO = 25 * 1024 * 1024                   # Groq 免費轉錄單檔上限約 25MB
 CHUNK_BYTES = 18 * 1024 * 1024                 # 切段大小上限（留餘裕）
 CHUNK_SECONDS = 180                            # 每段最長約 3 分鐘：第一段更快出來，也比較不會長時間卡住
-FIRST_CHUNK_SECONDS = 20                       # 第一段極短：先讓第一批雙語字幕最快可用
+FIRST_CHUNK_SECONDS = 60                       # 第一段保留足夠上下文，避免超短片段漏掉開頭
 FALLBACK_CHUNK_SECONDS = 10                    # 失敗段重試時再切小，避開 Groq 偶發卡死
 CHUNK_OVERLAP_SECONDS = 4                      # 每段互相重疊幾秒，避免 Whisper 在切段邊界漏字
 

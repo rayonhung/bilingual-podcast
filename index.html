@@ -208,7 +208,7 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 90000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
-const CACHE_PREFIX = "tx_v3_";
+const CACHE_PREFIX = "tx_v4_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 const apiGet = (path, timeoutMs=30000) => {
   const ctrl = new AbortController();
@@ -465,7 +465,7 @@ async function runJob(job, title, src, cacheKey){
   const myRun = ++runId;
   activeJob = job; activeCacheKey = cacheKey; failedChunks = []; hideRetry();
   startPlayer(title, src, "AI 轉錄（背景處理中…）");
-  setMore("正在準備前 20 秒雙語字幕…完成後即可開始", false);
+  setMore("正在準備第一批雙語字幕…完成後即可開始", false);
   let okCount=0, firstErr=null;
   for(let i=0;i<job.count;i++){
     if(myRun !== runId) return;
@@ -729,7 +729,7 @@ const playBtn=$("playBtn"), playIconPath=document.querySelector("#playIcon path"
 const ICON_PLAY='M8 5v14l11-7z', ICON_PAUSE='M6 5h4v14H6zM14 5h4v14h-4z';
 playBtn.addEventListener("click", async ()=>{
   if(!segments.length){
-    setMore("正在準備前 20 秒雙語字幕…完成後即可開始", false);
+    setMore("正在準備第一批雙語字幕…完成後即可開始", false);
     return;
   }
   if(audio.paused){
@@ -793,7 +793,7 @@ document.addEventListener("keydown", async e=>{
   if(e.code==="Space" && $("player").style.display==="block" && e.target.tagName!=="INPUT"){
     e.preventDefault();
     if(!segments.length){
-      setMore("正在準備前 20 秒雙語字幕…完成後即可開始", false);
+      setMore("正在準備第一批雙語字幕…完成後即可開始", false);
       return;
     }
     if(audio.paused){
