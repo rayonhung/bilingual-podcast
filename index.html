@@ -93,7 +93,6 @@
   .seg{padding:12px 14px;border-radius:12px;cursor:pointer;transition:background .15s;margin-bottom:2px}
   .seg .orig{font-size:16px;color:var(--ink);opacity:.5;transition:opacity .15s}
   .seg .trans{font-size:14.5px;color:var(--ink-soft);opacity:.45;margin-top:3px;transition:opacity .15s}
-  .seg:hover{background:#fff}
   .seg.active{background:var(--card);box-shadow:0 1px 0 var(--line);position:relative}
   .seg.active::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--accent)}
   .seg.active .orig{opacity:1;font-weight:500}
@@ -106,6 +105,9 @@
   .timeline-gap.failed .gap-title{color:var(--warn)}
   .timeline-gap.active-gap{border-style:solid;border-color:var(--accent);background:var(--card);
     box-shadow:0 1px 0 var(--line)}
+  @media(hover:hover) and (pointer:fine){
+    .seg:hover{background:#fff}
+  }
 
   .jumpback{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:45;background:var(--ink);color:#fff;padding:9px 16px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18);display:none;align-items:center;gap:7px;cursor:pointer}
   .readytoast{position:fixed;left:50%;bottom:104px;transform:translate(-50%,16px);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:24px;font-size:13px;font-weight:650;box-shadow:0 8px 24px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap}
@@ -633,6 +635,14 @@ let audioReadyNotified = false, readyToastTimer = null;
 let playingCachedAudio = false, cachedAudioRecoveryInProgress = false;
 const defaultPageTitle = document.title;
 
+function timelineVisualKey(state){
+  return [
+    state.status || "",
+    Number.isInteger(state.currentChunk) ? state.currentChunk : -1,
+    (state.chunkStates || []).join(",")
+  ].join("|");
+}
+
 function setStatus(text, pct){
   $("setup").style.display="none";
   $("status").style.display="block";
@@ -790,20 +800,22 @@ async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
     if(myRun!==runId) return;
 
     if(state.audioJob && state.audioJob.jobId) activeJob=state.audioJob;
-    timelineState={
+    const nextTimelineState={
       status:state.status || "running",
       message:state.message || "",
       chunkStates:state.chunkStates || [],
       currentChunk:Number.isInteger(state.currentChunk) ? state.currentChunk : -1
     };
+    const timelineChanged=timelineVisualKey(nextTimelineState)!==timelineVisualKey(timelineState);
     const incoming=state.segments || [];
     if(!playerStarted && activeJob && activeJob.audioUrl){
       startPlayer(title, activeJob.audioUrl, "伺服器背景處理（實際播放音訊，含廣告）", false);
       playerStarted=true;
       setMore("音訊已可先播放，雙語字幕由伺服器繼續背景處理…", false);
     }
+    timelineState=nextTimelineState;
     if(playerStarted && incoming.length) appendSegments(incoming);
-    else if(playerStarted) renderSegments();
+    else if(playerStarted && timelineChanged) renderSegments();
     since=Number(state.totalSegments || since);
     localStorage.setItem(backgroundStorageKey(cacheKey), JSON.stringify({
       backgroundJobId,
@@ -1210,6 +1222,7 @@ function renderSegments(){
   });
   lastActive=-1;
   lastTimelineGap=null;
+  syncPlaybackHighlight(false);
 }
 
 const playBtn=$("playBtn"), playIconPath=document.querySelector("#playIcon path");
@@ -1272,7 +1285,7 @@ document.addEventListener("visibilitychange", ()=>{
 });
 
 let lastActive=-1, lastTimelineGap=null, autoScroll=true;
-audio.addEventListener("timeupdate", ()=>{
+function syncPlaybackHighlight(shouldScroll=true){
   $("cur").textContent=fmt(audio.currentTime);
   if(audio.duration) $("scrub").value=(audio.currentTime/audio.duration)*100;
   const t=audio.currentTime; let idx=-1;
@@ -1283,7 +1296,7 @@ audio.addEventListener("timeupdate", ()=>{
     if(lastTimelineGap) lastTimelineGap.classList.remove("active-gap");
     lastTimelineGap=null;
     const seg=document.querySelector('.seg[data-i="'+idx+'"]');
-    if(seg){ seg.classList.add("active"); if(autoScroll) seg.scrollIntoView({behavior:"smooth",block:"center"}); }
+    if(seg){ seg.classList.add("active"); if(shouldScroll && autoScroll) seg.scrollIntoView({behavior:"smooth",block:"center"}); }
     lastActive=idx;
   }else if(idx===-1){
     const previous=document.querySelector(".seg.active");
@@ -1298,11 +1311,12 @@ audio.addEventListener("timeupdate", ()=>{
       lastTimelineGap=gap || null;
       if(lastTimelineGap){
         lastTimelineGap.classList.add("active-gap");
-        if(autoScroll) lastTimelineGap.scrollIntoView({behavior:"smooth",block:"center"});
+        if(shouldScroll && autoScroll) lastTimelineGap.scrollIntoView({behavior:"smooth",block:"center"});
       }
     }
   }
-});
+}
+audio.addEventListener("timeupdate", ()=>syncPlaybackHighlight(true));
 $("scrub").addEventListener("input", ()=>{ if(audio.duration) audio.currentTime=($("scrub").value/100)*audio.duration; });
 
 const speeds=[1,1.25,1.5,0.75]; let si=0;
