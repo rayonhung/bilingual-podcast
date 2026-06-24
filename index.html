@@ -319,6 +319,7 @@ const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 180000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
 const CACHE_PREFIX = "tx_v8_synced_audio_";
+const BACKGROUND_PREFIX = "bg_v1_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 async function parseApiResponse(r){
   const text = await r.text();
@@ -729,6 +730,125 @@ function restoreCached(raw, title, src, cacheKey){
   return true;
 }
 
+function backgroundStorageKey(cacheKey){
+  return BACKGROUND_PREFIX + cacheKey;
+}
+
+function showCompletionNotice(message){
+  const toast=$("readytoast");
+  toast.textContent=message || "雙語字幕處理完成";
+  toast.classList.add("show");
+  clearTimeout(readyToastTimer);
+  readyToastTimer=setTimeout(()=>toast.classList.remove("show"),7000);
+  if(document.hidden) document.title="字幕好了｜雙語 Podcast";
+  if(navigator.vibrate) navigator.vibrate([120,80,120]);
+  if(document.hidden && "Notification" in window && Notification.permission==="granted"){
+    try{ new Notification("雙語 Podcast", {body:message || "雙語字幕處理完成。"}); }catch(e){}
+  }
+}
+
+async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
+  const myRun=++runId;
+  let since=0, playerStarted=false, transientFailures=0;
+  setStatus("已交給伺服器背景處理，可以切換 App 或鎖定螢幕。", 0);
+  while(myRun===runId){
+    let state;
+    try{
+      state=await api("/api/background_status", {
+        backgroundJobId,
+        since,
+        key:groqKey()
+      }, 45000);
+      transientFailures=0;
+    }catch(err){
+      const expired=/背景工作已過期/.test(err.message || "");
+      if(expired){
+        localStorage.removeItem(backgroundStorageKey(cacheKey));
+        throw err;
+      }
+      transientFailures++;
+      if(transientFailures>=8) throw err;
+      if(playerStarted) setMore("暫時讀不到背景進度，伺服器仍可能在處理，稍後自動重試…", true);
+      else setStatus("暫時讀不到背景進度，稍後自動重試…", null);
+      await wait(Math.min(3000*transientFailures,12000));
+      continue;
+    }
+    if(myRun!==runId) return;
+
+    if(state.audioJob && state.audioJob.jobId) activeJob=state.audioJob;
+    const incoming=state.segments || [];
+    if(!playerStarted && activeJob && activeJob.audioUrl && (incoming.length || state.status==="done")){
+      startPlayer(title, activeJob.audioUrl, "伺服器背景處理（實際播放音訊，含廣告）", false);
+      playerStarted=true;
+    }
+    if(playerStarted && incoming.length) appendSegments(incoming);
+    since=Number(state.totalSegments || since);
+    localStorage.setItem(backgroundStorageKey(cacheKey), JSON.stringify({
+      backgroundJobId,
+      title,
+      src,
+      savedAt:Date.now()
+    }));
+
+    if(playerStarted){
+      setMore(state.message || "伺服器背景處理中…", state.status==="error");
+    }else{
+      setStatus((state.message || "伺服器背景處理中…")+" 可以離開這個畫面。", state.progress);
+    }
+
+    if(state.status==="done"){
+      failedChunks=state.failedChunks || [];
+      if(!playerStarted || !segments.length) throw new Error("背景工作完成，但沒有可顯示的字幕。");
+      if(failedChunks.length){
+        showRetry("背景處理完成，但有 "+failedChunks.length+" 段失敗 · 點此重試");
+      }else{
+        setMore("");
+      }
+      $("srcnote").textContent="字幕來源：伺服器背景 AI 轉錄（含廣告）";
+      persist(cacheKey);
+      localStorage.removeItem(backgroundStorageKey(cacheKey));
+      showCompletionNotice(state.message || "雙語字幕處理完成");
+      return;
+    }
+    if(state.status==="error"){
+      localStorage.removeItem(backgroundStorageKey(cacheKey));
+      throw new Error(state.error || state.message || "背景處理失敗");
+    }
+    await wait(3000);
+  }
+}
+
+async function startOrResumeBackground(title, src, cacheKey, forceNew=false){
+  activeCacheKey=cacheKey;
+  currentTitle=title;
+  currentSrc=src;
+  currentMode="feed";
+  const storageKey=backgroundStorageKey(cacheKey);
+  if(!forceNew){
+    try{
+      const saved=JSON.parse(localStorage.getItem(storageKey) || "null");
+      if(saved && saved.backgroundJobId && Date.now()-(saved.savedAt || 0)<2*60*60*1000){
+        return await monitorBackgroundJob(saved.backgroundJobId, title, src, cacheKey);
+      }
+    }catch(e){
+      localStorage.removeItem(storageKey);
+    }
+  }
+  const started=await api("/api/background_start", {
+    audioUrl:src,
+    model:$("quality").value,
+    target:$("lang").value,
+    key:groqKey()
+  },45000);
+  localStorage.setItem(storageKey, JSON.stringify({
+    backgroundJobId:started.backgroundJobId,
+    title,
+    src,
+    savedAt:Date.now()
+  }));
+  return await monitorBackgroundJob(started.backgroundJobId, title, src, cacheKey);
+}
+
 // 逐段交付：第一段好了就開播放器，其餘段在背景補上
 async function runJob(job, title, src, cacheKey){
   const key=groqKey(), model=$("quality").value;
@@ -789,15 +909,19 @@ async function reprocessCurrent(){
   if(!activeCacheKey || !currentSrc) return;
   playingCachedAudio = false;
   localStorage.removeItem(activeCacheKey);
+  localStorage.removeItem(backgroundStorageKey(activeCacheKey));
   runId++;
   audio.pause();
   segments = [];
   failedChunks = [];
   hideRetry(); hideReprocess();
   try{
-    setStatus("準備音檔…（重新處理）", null);
-    const job = await startFeedJob(currentSrc);
-    await runJob(job, currentTitle || "Podcast", currentSrc, activeCacheKey);
+    await startOrResumeBackground(
+      currentTitle || "Podcast",
+      currentSrc,
+      activeCacheKey,
+      true
+    );
   }catch(err){
     backToSetup();
     showErr(err.message);
@@ -890,13 +1014,8 @@ async function processEpisode(ep){
     if(cached && restoreCached(cached, ep.title, ep.audio, cacheKey)) return;
   }catch(e){}
   try{
-    // 一律轉錄實際下載並播放的同一份音訊。Podcast 的動態廣告通常不在官方字幕內，
-    // 若直接套官方字幕，廣告之後的整條時間軸都會錯位。
-    stage = "下載並準備同步音檔";
-    setStatus("準備同步音檔…（廣告也會一起轉錄）", null);
-    const job = await startFeedJob(ep.audio);
-    stage = "開啟播放器與轉錄";
-    await runJob(job, ep.title, ep.audio, cacheKey);
+    stage = "建立伺服器背景工作";
+    await startOrResumeBackground(ep.title, ep.audio, cacheKey);
   }catch(err){
     backToSetup();
     showErr(stage+"失敗："+(err && err.message ? err.message : String(err)));

@@ -35,6 +35,8 @@ CHUNK_OVERLAP_SECONDS = 4                      # 每段互相重疊幾秒，避�
 # 下載＋切好的音檔暫存在記憶體，讓前端能一段一段地要結果（逐段交付）
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+BACKGROUND_JOBS = {}
+BACKGROUND_JOBS_LOCK = threading.Lock()
 
 def delete_job(job):
     path = (job or {}).get("audioPath")
@@ -752,6 +754,195 @@ def job_chunk(data):
     return {"index": idx,
             "segments": [{"start": s["start"] + t0, "end": s["end"] + t0, "text": s["text"]} for s in segs]}
 
+
+def background_job_snapshot(background_id, since=0):
+    with BACKGROUND_JOBS_LOCK:
+        job = BACKGROUND_JOBS.get(background_id)
+        if not job:
+            raise ValueError("背景工作已過期，請重新點選這一集。")
+        job["ts"] = time.time()
+        segments = job.get("segments", [])
+        since = max(0, min(int(since or 0), len(segments)))
+        audio_job = dict(job.get("audioJob") or {})
+        result = {
+            "backgroundJobId": background_id,
+            "status": job["status"],
+            "stage": job.get("stage", ""),
+            "message": job.get("message", ""),
+            "progress": job.get("progress", 0),
+            "segments": [dict(s) for s in segments[since:]],
+            "totalSegments": len(segments),
+            "failedChunks": list(job.get("failedChunks", [])),
+            "audioJob": audio_job,
+            "error": job.get("error", ""),
+        }
+    if audio_job.get("jobId"):
+        with JOBS_LOCK:
+            audio = JOBS.get(audio_job["jobId"])
+            if audio:
+                audio["ts"] = time.time()
+    return result
+
+
+def update_background_job(background_id, **changes):
+    with BACKGROUND_JOBS_LOCK:
+        job = BACKGROUND_JOBS.get(background_id)
+        if not job:
+            return
+        job.update(changes)
+        job["ts"] = time.time()
+
+
+def append_background_segments(background_id, segs):
+    with BACKGROUND_JOBS_LOCK:
+        job = BACKGROUND_JOBS.get(background_id)
+        if not job:
+            return
+        existing = job.setdefault("segments", [])
+        existing.extend(dict(s) for s in segs)
+        existing.sort(key=lambda s: s.get("start", 0))
+        job["ts"] = time.time()
+
+
+def run_background_job(background_id, data, key):
+    try:
+        update_background_job(
+            background_id,
+            status="running",
+            stage="preparing",
+            message="正在下載並準備同步音訊…",
+            progress=1,
+        )
+        audio_job = job_start({"audioUrl": data["audioUrl"]})
+        update_background_job(
+            background_id,
+            audioJob=audio_job,
+            stage="transcribing",
+            message="同步音訊已準備完成，開始背景轉錄…",
+            progress=3,
+        )
+
+        failed = []
+        total_chunks = max(1, int(audio_job["count"]))
+        model = data.get("model") or "whisper-large-v3-turbo"
+        target = data.get("target") or "繁體中文（台灣用語）"
+        for idx in range(total_chunks):
+            update_background_job(
+                background_id,
+                stage="transcribing",
+                message="背景轉錄第 %d / %d 段…" % (idx + 1, total_chunks),
+                progress=round((idx / total_chunks) * 90),
+            )
+            try:
+                try:
+                    result = job_chunk({
+                        "jobId": audio_job["jobId"],
+                        "index": idx,
+                        "model": model,
+                        "key": key,
+                        "attempts": 2,
+                    })
+                except Exception:
+                    result = job_chunk({
+                        "jobId": audio_job["jobId"],
+                        "index": idx,
+                        "model": model,
+                        "key": key,
+                        "attempts": 2,
+                        "splitFallback": True,
+                    })
+
+                segs = result.get("segments", [])
+                translated = []
+                for start in range(0, len(segs), 6):
+                    batch = segs[start:start + 6]
+                    update_background_job(
+                        background_id,
+                        stage="translating",
+                        message="第 %d / %d 段，翻譯 %d / %d 句…" % (
+                            idx + 1, total_chunks, min(start + 6, len(segs)), len(segs)
+                        ),
+                        progress=round(((idx + 0.65) / total_chunks) * 90),
+                    )
+                    translations = groq_translate([s["text"] for s in batch], target, key)
+                    for seg, translated_text in zip(batch, translations):
+                        item = dict(seg)
+                        item["trans"] = translated_text
+                        translated.append(item)
+                    append_background_segments(background_id, translated[-len(batch):])
+            except Exception as e:
+                failed.append(idx)
+                update_background_job(
+                    background_id,
+                    failedChunks=list(failed),
+                    message="第 %d 段失敗，背景工作繼續處理下一段：%s" % (idx + 1, e),
+                )
+
+        snapshot = background_job_snapshot(background_id)
+        if not snapshot["totalSegments"]:
+            raise RuntimeError("所有段落都處理失敗，請稍後重新嘗試。")
+        message = "雙語字幕處理完成"
+        if failed:
+            message += "，但有 %d 段需要重試" % len(failed)
+        update_background_job(
+            background_id,
+            status="done",
+            stage="done",
+            message=message,
+            progress=100,
+            failedChunks=list(failed),
+        )
+    except Exception as e:
+        update_background_job(
+            background_id,
+            status="error",
+            stage="error",
+            message="背景處理失敗",
+            error=str(e),
+        )
+
+
+def start_background_job(data, key):
+    now = time.time()
+    with BACKGROUND_JOBS_LOCK:
+        for bgid in [k for k, v in BACKGROUND_JOBS.items() if now - v["ts"] > 7200]:
+            BACKGROUND_JOBS.pop(bgid, None)
+        for bgid, job in BACKGROUND_JOBS.items():
+            if (job.get("audioUrl") == data.get("audioUrl") and
+                    job.get("target") == data.get("target") and
+                    job.get("model") == data.get("model") and
+                    job.get("status") in ("queued", "running")):
+                return {"backgroundJobId": bgid, "reused": True}
+        background_id = hashlib.sha1((
+            "%s|%s|%s|%f" % (
+                data.get("audioUrl", ""),
+                data.get("target", ""),
+                data.get("model", ""),
+                now,
+            )
+        ).encode()).hexdigest()[:18]
+        BACKGROUND_JOBS[background_id] = {
+            "status": "queued",
+            "stage": "queued",
+            "message": "背景工作已建立，準備開始…",
+            "progress": 0,
+            "segments": [],
+            "failedChunks": [],
+            "audioJob": {},
+            "audioUrl": data.get("audioUrl", ""),
+            "target": data.get("target", ""),
+            "model": data.get("model", ""),
+            "ts": now,
+        }
+    thread = threading.Thread(
+        target=run_background_job,
+        args=(background_id, dict(data), key),
+        daemon=True,
+        name="podcast-background-" + background_id[:6],
+    )
+    thread.start()
+    return {"backgroundJobId": background_id, "reused": False}
+
 # ----------------------------------------------------------------------------
 # HTTP handler
 # ----------------------------------------------------------------------------
@@ -976,6 +1167,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_auth(data)
                 data["key"] = self._groq_key(data)
                 self._send(200, job_chunk(data))
+            elif route == "/api/background_start":
+                self._require_auth(data)
+                if not data.get("audioUrl"):
+                    return self._send(400, {"error": "缺少音訊網址。"})
+                self._send(200, start_background_job(data, self._groq_key(data)))
+            elif route == "/api/background_status":
+                self._require_auth(data)
+                self._send(200, background_job_snapshot(
+                    data.get("backgroundJobId", ""),
+                    data.get("since", 0),
+                ))
             elif route == "/api/translate":
                 self._require_auth(data)
                 self._send(200, {"t": groq_translate(data["texts"], data["target"], self._groq_key(data))})
@@ -993,6 +1195,8 @@ class Handler(BaseHTTPRequestHandler):
                 where = "字幕檔"
             elif self.path.startswith("/api/transcribe") or self.path.startswith("/api/job"):
                 where = "音檔或 Groq API"
+            elif self.path.startswith("/api/background"):
+                where = "背景處理"
             elif self.path.startswith("/api/translate"):
                 where = "Groq 翻譯 API"
             self._send(502, {"error": explain_http_error(where, e)})
