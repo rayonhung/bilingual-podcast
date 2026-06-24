@@ -102,16 +102,88 @@
   .jumpback{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:45;background:var(--ink);color:#fff;padding:9px 16px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18);display:none;align-items:center;gap:7px;cursor:pointer}
   .err{background:#FBEEE7;border:1px solid #EBC9B6;color:var(--warn);padding:12px 14px;border-radius:10px;font-size:13px;margin-top:12px;display:none}
   .topactions{display:flex;justify-content:flex-end;padding:10px 0}
+
+  .apphead{display:flex;align-items:center;gap:14px;padding:18px 0 14px;position:sticky;top:0;z-index:30;background:rgba(243,244,241,.94);backdrop-filter:blur(12px)}
+  .apphead .brand{padding:0}
+  .headcopy{margin-left:auto;color:var(--ink-faint);font-size:12px}
+  .access{padding:16px 18px}
+  .access.unlocked{display:none}
+  .browse{padding-bottom:110px}
+  .view{display:none}
+  .view.active{display:block}
+  .welcome{padding:18px 0 16px}
+  .eyebrow{font-size:12px;color:var(--accent);font-weight:700;margin-bottom:5px}
+  .welcome h2{font-size:28px;line-height:1.2;font-weight:700;letter-spacing:0}
+  .welcome p{font-size:14px;color:var(--ink-soft);margin-top:7px}
+  .searchbox{display:flex;gap:8px;margin:14px 0 18px}
+  .searchbox input{height:46px;background:#fff;border-radius:12px;padding-left:15px}
+  .searchbox button{height:46px;flex:none}
+  .chips{display:flex;gap:8px;overflow:auto;padding:0 0 8px;scrollbar-width:none}
+  .chips::-webkit-scrollbar,.coverrail::-webkit-scrollbar{display:none}
+  .chip{white-space:nowrap;padding:7px 13px;border-radius:18px;border:1px solid var(--line);background:#fff;color:var(--ink-soft);font-size:12.5px}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .sectionhead{display:flex;align-items:end;justify-content:space-between;margin:24px 0 12px}
+  .sectionhead h3{font-size:18px;line-height:1.2}
+  .sectionhead span{font-size:12px;color:var(--ink-faint)}
+  .coverrail{display:grid;grid-auto-flow:column;grid-auto-columns:138px;gap:14px;overflow:auto;padding-bottom:6px;scroll-snap-type:x proximity}
+  .showcard{cursor:pointer;scroll-snap-align:start;min-width:0}
+  .showcard img{display:block;width:138px;height:138px;object-fit:cover;border-radius:7px;background:#E7E9E5;box-shadow:0 5px 14px rgba(27,36,48,.09)}
+  .showcard .ct{font-size:13px;font-weight:650;line-height:1.35;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .showcard .ca{font-size:11.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .emptycopy{padding:24px 0;color:var(--ink-faint);font-size:13px}
+  .resultgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 14px}
+  .resultgrid .showcard img{width:100%;height:auto;aspect-ratio:1}
+  .browseback{display:inline-flex;align-items:center;gap:7px;background:transparent;color:var(--ink-soft);padding:8px 0;margin:4px 0 14px}
+  .showhero{display:grid;grid-template-columns:180px 1fr;gap:24px;align-items:end;margin-bottom:24px}
+  .showhero img{width:180px;height:180px;object-fit:cover;border-radius:8px;background:#E7E9E5;box-shadow:0 7px 20px rgba(27,36,48,.12)}
+  .showhero h2{font-size:25px;line-height:1.2;margin:5px 0 7px}
+  .showauthor{font-size:13px;color:var(--accent);font-weight:650}
+  .showdesc{font-size:13px;color:var(--ink-soft);margin-top:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .episodeblock{border-top:1px solid var(--line);max-height:none!important;overflow:visible!important;border-radius:0!important}
+  .episode{display:grid;grid-template-columns:1fr auto;gap:14px;padding:17px 0;border-bottom:1px solid var(--line);cursor:pointer}
+  .episode:hover .episode-title{color:var(--accent)}
+  .episode-title{font-size:15px;font-weight:650;line-height:1.38}
+  .episode-desc{font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .episode-meta{display:flex;align-items:center;gap:8px;color:var(--ink-faint);font-size:11.5px;margin-top:8px}
+  .episode-action{align-self:center;border:1px solid var(--line);background:#fff;color:var(--accent);padding:8px 11px;font-size:12px;white-space:nowrap}
+  .episode:hover .episode-action{border-color:var(--accent)}
+  .catalog-loading{padding:42px 0;text-align:center;color:var(--ink-faint);font-size:13px}
+  .catalog-loading .spinner{width:24px;height:24px;margin-bottom:10px}
+  details.advanced{margin-top:26px;border-top:1px solid var(--line);padding-top:13px}
+  details.advanced summary{cursor:pointer;color:var(--ink-faint);font-size:12px}
+  details.advanced .feedrow{margin-top:10px}
+  .privacy-note{font-size:11.5px;color:var(--ink-faint);margin-top:10px}
+
+  @media(max-width:620px){
+    :root{--maxw:100%}
+    .wrap{padding:0 16px}
+    .apphead{padding-top:14px}
+    .brand h1{font-size:14px}
+    .headcopy{display:none}
+    .welcome h2{font-size:25px}
+    .resultgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .coverrail{grid-auto-columns:126px}
+    .showcard img{width:126px;height:126px}
+    .showhero{grid-template-columns:112px 1fr;gap:16px;align-items:center}
+    .showhero img{width:112px;height:112px}
+    .showhero h2{font-size:21px}
+    .showdesc{grid-column:1/-1;margin-top:-6px}
+    .episode{grid-template-columns:1fr}
+    .episode-action{justify-self:start}
+    .panel{border-radius:12px}
+  }
 </style>
 </head>
 <body>
 
 <div class="wrap">
-  <div class="brand"><span class="dot"></span><h1>雙語 Podcast</h1><span>聽外語，邊讀邊懂</span></div>
+  <header class="apphead">
+    <div class="brand"><span class="dot"></span><h1>雙語 Podcast</h1></div>
+    <div class="headcopy">選一集，轉成你的私人雙語播放器</div>
+  </header>
 
-  <!-- SETUP -->
   <div id="setup">
-    <div class="panel">
+    <div class="panel access" id="accessPanel">
       <h2 id="credTitle">金鑰</h2>
       <div id="groqKeyBox">
         <label for="key">Groq API 金鑰</label>
@@ -129,48 +201,81 @@
       </div>
     </div>
 
-    <div class="panel">
-      <div class="row" style="margin-bottom:14px">
-        <div><label for="lang">翻譯成</label>
-          <select id="lang">
-            <option value="繁體中文（台灣用語）">繁體中文</option>
-            <option value="简体中文">簡體中文</option>
-            <option value="日本語">日本語</option>
-            <option value="English">English</option>
-          </select></div>
-        <div><label for="quality">轉錄品質</label>
-          <select id="quality">
-            <option value="whisper-large-v3-turbo">快速 turbo</option>
-            <option value="whisper-large-v3">高準確</option>
-          </select></div>
-      </div>
+    <select id="lang" hidden>
+      <option value="繁體中文（台灣用語）" selected>繁體中文</option>
+    </select>
+    <select id="quality" hidden>
+      <option value="whisper-large-v3-turbo" selected>快速 turbo</option>
+    </select>
 
-      <div class="tabs">
-        <div class="tab on" id="tabFeed">貼 RSS 連結</div>
-        <div class="tab" id="tabFile">上傳 MP3</div>
-      </div>
-
-      <!-- feed mode -->
-      <div id="feedMode">
-        <div class="feedrow">
-          <input type="text" id="feedUrl" placeholder="貼上 podcast 的 RSS feed 網址">
-          <button class="btn-primary" id="loadFeed">讀取</button>
+    <main class="browse" id="browse">
+      <section class="view active" id="homeView">
+        <div class="welcome">
+          <div class="eyebrow">私人雙語播放</div>
+          <h2>今天想聽懂什麼？</h2>
+          <p>搜尋節目，選一集產生只屬於你的逐句雙語字幕。</p>
         </div>
-        <div class="hint">不知道 RSS 網址？在 <a href="https://podcastindex.org" target="_blank">podcastindex.org</a> 搜尋節目名稱，複製它的 feed 連結。附字幕的節目會標上「內含字幕」，那種跳過轉錄、直接翻。</div>
-        <div id="eplist" style="display:none"></div>
-      </div>
 
-      <!-- file mode -->
-      <div id="fileMode" style="display:none">
-        <div class="drop" id="drop">
-          <div class="big">把 MP3 拖進來，或點這裡選檔</div>
-          <div class="sub">適合 Spotify 獨家、或你已下載的檔案 · MP3 可吃長檔（會自動切段），其他格式上限約 24 MB</div>
+        <div class="searchbox">
+          <input type="text" id="catalogSearch" placeholder="搜尋 Podcast、主持人或主題">
+          <button class="btn-primary" id="searchBtn">搜尋</button>
         </div>
-        <input type="file" id="file" accept="audio/*,.mp3,.m4a,.wav" hidden>
-      </div>
 
+        <div class="chips" id="topicChips">
+          <button class="chip on" data-query="business">商業</button>
+          <button class="chip" data-query="technology">科技</button>
+          <button class="chip" data-query="design">設計</button>
+          <button class="chip" data-query="news">新聞</button>
+          <button class="chip" data-query="science">科學</button>
+          <button class="chip" data-query="culture">文化</button>
+        </div>
+
+        <div class="sectionhead">
+          <h3 id="catalogTitle">值得一聽</h3>
+          <span id="catalogCount"></span>
+        </div>
+        <div id="catalogLoading" class="catalog-loading">
+          <div class="spinner"></div>
+          正在找節目…
+        </div>
+        <div class="coverrail" id="catalogRail"></div>
+        <div class="resultgrid" id="catalogGrid" style="display:none"></div>
+
+        <details class="advanced">
+          <summary>已有 RSS 連結？直接開啟</summary>
+          <div class="feedrow">
+            <input type="text" id="feedUrl" placeholder="貼上 Podcast RSS feed 網址">
+            <button class="btn-ghost" id="loadFeed">開啟</button>
+          </div>
+        </details>
+        <div class="privacy-note">字幕與翻譯按需產生，結果只保存在你的瀏覽器中。</div>
+      </section>
+
+      <section class="view" id="showView">
+        <button class="browseback" id="showBack">← 回到探索</button>
+        <div id="showLoading" class="catalog-loading">
+          <div class="spinner"></div>
+          正在讀取單集…
+        </div>
+        <div id="showContent" style="display:none">
+          <div class="showhero">
+            <img id="showImage" alt="">
+            <div>
+              <div class="eyebrow">Podcast</div>
+              <h2 id="showTitle"></h2>
+              <div class="showauthor" id="showAuthor"></div>
+              <p class="showdesc" id="showDescription"></p>
+            </div>
+          </div>
+          <div class="sectionhead">
+            <h3>所有單集</h3>
+            <span id="episodeCount"></span>
+          </div>
+          <div class="episodeblock" id="eplist"></div>
+        </div>
+      </section>
       <div class="err" id="err"></div>
-    </div>
+    </main>
   </div>
 
   <!-- STATUS -->
@@ -269,6 +374,7 @@ async function startFeedJob(audioUrl, timeoutMs=180000){
 const savedKey = localStorage.getItem("groq_key");
 if(savedKey) $("key").value = savedKey;
 $("key").addEventListener("change", () => localStorage.setItem("groq_key", $("key").value.trim()));
+$("key").addEventListener("input", updateAccessPanel);
 
 async function loadConfig(){
   try{
@@ -280,21 +386,20 @@ async function loadConfig(){
   $("appPasswordBox").style.display = appConfig.serverKey && appConfig.passwordRequired ? "block" : "none";
   $("appPasswordFields").style.display = appConfig.authed ? "none" : "flex";
   $("appPasswordHint").textContent = appConfig.authed
-    ? "已解鎖，可以直接讀取 RSS 或上傳 MP3。"
+    ? "已解鎖，可以開始探索節目。"
     : "這個站台使用伺服器端 Groq key；輸入密碼後即可使用。";
   setAuthStatus(appConfig.authed ? "密碼正確，已解鎖。" : "", false);
   $("credTitle").textContent = appConfig.serverKey ? "使用權限" : "金鑰";
+  updateAccessPanel();
+  if(!appConfig.passwordRequired || appConfig.authed) loadCatalog("business", false);
 }
 loadConfig();
 
-// tabs
-$("tabFeed").addEventListener("click", () => switchTab("feed"));
-$("tabFile").addEventListener("click", () => switchTab("file"));
-function switchTab(which){
-  const f = which==="feed";
-  $("tabFeed").classList.toggle("on", f); $("tabFile").classList.toggle("on", !f);
-  $("feedMode").style.display = f?"block":"none";
-  $("fileMode").style.display = f?"none":"block";
+function updateAccessPanel(){
+  const ready = appConfig.serverKey
+    ? (!appConfig.passwordRequired || appConfig.authed)
+    : !!$("key").value.trim();
+  $("accessPanel").classList.toggle("unlocked", ready);
 }
 
 function showErr(m){ const e=$("err"); e.textContent=m; e.style.display="block"; }
@@ -318,8 +423,10 @@ async function unlockApp(){
     appConfig.authed = true;
     $("appPasswordBox").style.display = "block";
     $("appPasswordFields").style.display = "none";
-    $("appPasswordHint").textContent = "已解鎖，可以直接讀取 RSS 或上傳 MP3。";
+    $("appPasswordHint").textContent = "已解鎖，可以開始探索節目。";
     setAuthStatus("密碼正確，已解鎖。", false);
+    updateAccessPanel();
+    loadCatalog("business", false);
     return true;
   }catch(err){
     setAuthStatus(err.message, true);
@@ -341,7 +448,119 @@ async function ensureAccess(){
 $("unlockBtn").addEventListener("click", unlockApp);
 $("appPassword").addEventListener("keydown", e => { if(e.key==="Enter") unlockApp(); });
 
-// ---------- feed ----------
+// ---------- podcast catalog ----------
+let catalogLoaded = false;
+let currentShow = null;
+let currentView = "home";
+
+function setView(name){
+  currentView = name;
+  $("homeView").classList.toggle("active", name==="home");
+  $("showView").classList.toggle("active", name==="show");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function makeShowCard(show){
+  const card = document.createElement("article");
+  card.className = "showcard";
+  card.tabIndex = 0;
+  const img = document.createElement("img");
+  img.src = show.image;
+  img.alt = show.title + " 封面";
+  img.loading = "lazy";
+  const title = document.createElement("div");
+  title.className = "ct";
+  title.textContent = show.title;
+  const author = document.createElement("div");
+  author.className = "ca";
+  author.textContent = show.author || show.genre || "Podcast";
+  card.append(img, title, author);
+  card.addEventListener("click", ()=>openShow(show));
+  card.addEventListener("keydown", e=>{
+    if(e.key==="Enter" || e.key===" "){ e.preventDefault(); openShow(show); }
+  });
+  return card;
+}
+
+async function loadCatalog(query, isSearch=true){
+  hideErr();
+  if(appConfig.passwordRequired && !appConfig.authed){
+    $("catalogLoading").style.display = "none";
+    return;
+  }
+  const q = (query || "").trim();
+  if(!q) return;
+  $("catalogLoading").style.display = "block";
+  $("catalogRail").innerHTML = "";
+  $("catalogGrid").innerHTML = "";
+  $("catalogRail").style.display = "none";
+  $("catalogGrid").style.display = "none";
+  $("searchBtn").disabled = true;
+  try{
+    const data = await api("/api/search", {query:q, country:"us", limit:isSearch?30:18}, 45000);
+    const results = data.results || [];
+    $("catalogTitle").textContent = isSearch ? "搜尋結果" : "值得一聽";
+    $("catalogCount").textContent = results.length ? results.length+" 個節目" : "";
+    const target = isSearch ? $("catalogGrid") : $("catalogRail");
+    results.forEach(show=>target.appendChild(makeShowCard(show)));
+    target.style.display = results.length ? (isSearch?"grid":"grid") : "block";
+    if(!results.length) target.innerHTML = '<div class="emptycopy">找不到相關節目，換個名稱或主題試試。</div>';
+    catalogLoaded = true;
+  }catch(err){
+    showErr("節目搜尋失敗："+err.message);
+  }finally{
+    $("catalogLoading").style.display = "none";
+    $("searchBtn").disabled = false;
+  }
+}
+
+$("searchBtn").addEventListener("click", ()=>loadCatalog($("catalogSearch").value, true));
+$("catalogSearch").addEventListener("keydown", e=>{
+  if(e.key==="Enter") loadCatalog($("catalogSearch").value, true);
+});
+$("topicChips").addEventListener("click", e=>{
+  const chip = e.target.closest(".chip");
+  if(!chip) return;
+  document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("on", c===chip));
+  $("catalogSearch").value = "";
+  loadCatalog(chip.dataset.query, false);
+});
+
+async function openShow(show){
+  hideErr();
+  if(appConfig.passwordRequired && !appConfig.authed){
+    setAuthStatus("請先解鎖，再瀏覽節目。", true);
+    return;
+  }
+  currentShow = show;
+  setView("show");
+  $("showLoading").style.display = "block";
+  $("showContent").style.display = "none";
+  try{
+    const data = await api("/api/feed", {feedUrl:show.feedUrl}, 45000);
+    renderShow({...show, ...data, title:data.show || show.title});
+  }catch(err){
+    setView("home");
+    showErr("讀不到這個節目："+err.message);
+  }
+}
+
+function renderShow(show){
+  currentShow = show;
+  $("showImage").src = show.image || "";
+  $("showImage").alt = show.title+" 封面";
+  $("showTitle").textContent = show.title || "Podcast";
+  $("showAuthor").textContent = show.author || "";
+  $("showDescription").textContent = show.description || "選擇一集，產生私人雙語逐句字幕。";
+  renderEpisodes(show.episodes || []);
+  $("episodeCount").textContent = (show.episodes || []).length+" 集";
+  $("showLoading").style.display = "none";
+  $("showContent").style.display = "block";
+}
+
+$("showBack").addEventListener("click", ()=>setView("home"));
+
+// ---------- direct RSS ----------
 $("loadFeed").addEventListener("click", loadFeed);
 $("feedUrl").addEventListener("keydown", e => { if(e.key==="Enter") loadFeed(); });
 
@@ -353,40 +572,38 @@ async function loadFeed(){
   $("loadFeed").disabled = true; $("loadFeed").textContent = "讀取中…";
   try{
     const data = await api("/api/feed", {feedUrl:url});
-    renderEpisodes(data.episodes||[]);
+    setView("show");
+    renderShow({...data, title:data.show || "Podcast", feedUrl:url});
   }catch(err){ showErr("讀不到這個 feed：" + err.message); }
-  finally{ $("loadFeed").disabled=false; $("loadFeed").textContent="讀取"; }
+  finally{ $("loadFeed").disabled=false; $("loadFeed").textContent="開啟"; }
 }
 
 function renderEpisodes(eps){
   const box = $("eplist");
   box.innerHTML = "";
-  if(!eps.length){ box.style.display="block"; box.innerHTML='<div class="ep"><div class="t">這個 feed 沒抓到可播放的單集。</div></div>'; return; }
+  if(!eps.length){ box.innerHTML='<div class="emptycopy">這個節目目前沒有可播放的單集。</div>'; return; }
   eps.slice(0,60).forEach(ep => {
-    const d = document.createElement("div");
-    d.className = "ep";
-    const badge = ep.transcript
-      ? '<span class="badge">內含字幕</span>'
-      : '<span class="badge gray">需轉錄</span>';
-    d.innerHTML = '<div class="t"></div><div class="m">'+badge+'<span></span></div>';
-    d.querySelector(".t").textContent = ep.title;
-    d.querySelector(".m span:last-child").textContent = (ep.date||"").replace(/\s*\+?\d{4}.*$/,"");
+    const d = document.createElement("article");
+    d.className = "episode";
+    const copy = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "episode-title";
+    title.textContent = ep.title;
+    const desc = document.createElement("div");
+    desc.className = "episode-desc";
+    desc.textContent = ep.description || "點選後開始播放，並產生私人雙語字幕。";
+    const meta = document.createElement("div");
+    meta.className = "episode-meta";
+    const date = (ep.date||"").replace(/\s*\+?\d{4}.*$/,"");
+    meta.textContent = [date, ep.duration, ep.transcript?"附官方字幕":"AI 轉錄"].filter(Boolean).join(" · ");
+    const action = document.createElement("button");
+    action.className = "episode-action";
+    action.textContent = "雙語播放";
+    copy.append(title, desc, meta);
+    d.append(copy, action);
     d.addEventListener("click", () => processEpisode(ep));
     box.appendChild(d);
   });
-  box.style.display = "block";
-}
-
-// ---------- file upload ----------
-const drop=$("drop"), fileInput=$("file");
-drop.addEventListener("click", () => fileInput.click());
-drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
-fileInput.addEventListener("change", () => { if(fileInput.files[0]) handleFile(fileInput.files[0]); });
-
-function readAsB64(file){
-  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=rej; r.readAsDataURL(file); });
 }
 
 // ---------- shared state ----------
@@ -684,26 +901,6 @@ async function processEpisode(ep){
     backToSetup();
     showErr(stage+"失敗："+(err && err.message ? err.message : String(err)));
   }
-}
-
-async function handleFile(file){
-  hideErr();
-  if(!(await ensureAccess())) return;
-  if(file.size > 200*1024*1024){ showErr("這個檔超過 200 MB，太大了，先剪短一點。"); return; }
-  if(file.size > 24*1024*1024 && !/\.mp3$/i.test(file.name)){ showErr("超過 24 MB 的檔目前只有 MP3 能自動切段，請改用 MP3。"); return; }
-  const cacheKey = CACHE_PREFIX+file.name+"_"+file.size+"_"+$("lang").value;
-  const url = URL.createObjectURL(file);
-  activeCacheKey = cacheKey; currentTitle = file.name; currentSrc = ""; currentMode = "file";
-  try{
-    const cached = localStorage.getItem(cacheKey);
-    if(cached){ restoreCached(cached, file.name, url, cacheKey); return; }
-  }catch(e){}
-  try{
-    setStatus("準備音檔…（上傳＋分段）", null);
-    const b64 = await readAsB64(file);
-    const job = await api("/api/job_start", {audioB64:b64, filename:file.name, model:$("quality").value, key:groqKey()});
-    await runJob(job, file.name, url, cacheKey);
-  }catch(err){ backToSetup(); showErr(err.message); }
 }
 
 // ---------- player ----------

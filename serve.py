@@ -13,7 +13,7 @@
 只需要 Python 3，不必安裝任何套件。
 """
 
-import json, os, re, sys, time, base64, hashlib, threading, webbrowser, urllib.request, urllib.error, urllib.parse, subprocess, tempfile, shutil
+import json, os, re, sys, time, base64, hashlib, threading, webbrowser, urllib.request, urllib.error, urllib.parse, subprocess, tempfile, shutil, html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8000
@@ -114,16 +114,35 @@ def normalize_url(url, base=None):
 
 def parse_feed(xml_bytes, base_url=None):
     root = ET.fromstring(xml_bytes)
+    channel = next((el for el in root.iter() if localname(el.tag) == "channel"), root)
     show = ""
-    for el in root.iter():
-        if localname(el.tag) == "title":
+    show_author = ""
+    show_description = ""
+    show_image = ""
+    for el in channel:
+        ln = localname(el.tag)
+        if ln == "title" and not show:
             show = (el.text or "").strip()
-            break
+        elif ln in ("author", "owner") and not show_author:
+            if ln == "owner":
+                show_author = next(((c.text or "").strip() for c in el
+                                    if localname(c.tag) in ("name", "email") and (c.text or "").strip()), "")
+            else:
+                show_author = (el.text or "").strip()
+        elif ln in ("description", "summary") and not show_description:
+            show_description = re.sub(r"<[^>]+>", " ", html.unescape(el.text or ""))
+            show_description = re.sub(r"\s+", " ", show_description).strip()
+        elif ln == "image" and not show_image:
+            show_image = normalize_url(el.get("href") or "", base_url)
+            if not show_image:
+                show_image = normalize_url(next(((c.text or "").strip() for c in el
+                                                 if localname(c.tag) == "url"), ""), base_url)
     episodes = []
     for it in root.iter():
         if localname(it.tag) != "item":
             continue
         title, pub, audio = "", "", None
+        description, duration, episode_image = "", "", ""
         best = None  # (url, type, score)
         for ch in it:
             ln = localname(ch.tag)
@@ -136,6 +155,13 @@ def parse_feed(xml_bytes, base_url=None):
                 ty = (ch.get("type") or "")
                 if u and ("audio" in ty or u.lower().split("?")[0].endswith((".mp3", ".m4a", ".aac", ".ogg", ".wav"))):
                     audio = normalize_url(u, base_url)
+            elif ln in ("description", "summary", "encoded") and not description:
+                description = re.sub(r"<[^>]+>", " ", html.unescape(ch.text or ""))
+                description = re.sub(r"\s+", " ", description).strip()
+            elif ln == "duration":
+                duration = (ch.text or "").strip()
+            elif ln == "image":
+                episode_image = normalize_url(ch.get("href") or (ch.text or ""), base_url)
             elif ln == "transcript" and "podcastindex.org/namespace" in ch.tag:
                 u = ch.get("url")
                 ty = (ch.get("type") or "").lower()
@@ -150,10 +176,53 @@ def parse_feed(xml_bytes, base_url=None):
                 "title": title or "(未命名)",
                 "date": pub,
                 "audio": audio,
+                "description": description,
+                "duration": duration,
+                "image": episode_image or show_image,
                 "transcript": best[0] if best else None,
                 "transcriptType": best[1] if best else None,
             })
-    return {"show": show, "episodes": episodes}
+    return {
+        "show": show,
+        "author": show_author,
+        "description": show_description,
+        "image": show_image,
+        "feedUrl": base_url or "",
+        "episodes": episodes,
+    }
+
+
+def search_podcasts(term, country="us", limit=24):
+    term = (term or "").strip()
+    if not term:
+        return []
+    query = urllib.parse.urlencode({
+        "term": term,
+        "media": "podcast",
+        "entity": "podcast",
+        "country": (country or "us")[:2],
+        "limit": max(1, min(int(limit or 24), 40)),
+    })
+    raw = http_get("https://itunes.apple.com/search?" + query, timeout=30,
+                   accept="application/json")
+    payload = json.loads(raw.decode("utf-8", "replace"))
+    results = []
+    for item in payload.get("results", []):
+        feed_url = normalize_url(item.get("feedUrl"))
+        if not feed_url:
+            continue
+        artwork = item.get("artworkUrl600") or item.get("artworkUrl100") or item.get("artworkUrl60") or ""
+        artwork = re.sub(r"/\d+x\d+bb", "/600x600bb", artwork)
+        results.append({
+            "id": str(item.get("collectionId") or feed_url),
+            "title": item.get("collectionName") or item.get("trackName") or "Podcast",
+            "author": item.get("artistName") or "",
+            "image": artwork,
+            "feedUrl": feed_url,
+            "genre": item.get("primaryGenreName") or "",
+            "episodeCount": item.get("trackCount") or 0,
+        })
+    return results
 
 # ----------------------------------------------------------------------------
 # 字幕檔解析：SRT / VTT / podcast JSON  ->  [{start,end,text}]
@@ -759,6 +828,13 @@ class Handler(BaseHTTPRequestHandler):
                 if data.get("appPassword") != APP_PASSWORD:
                     return self._send(401, {"error": "App 密碼不正確。"})
                 return self._send_auth_cookie()
+            if route == "/api/search":
+                self._require_auth(data)
+                return self._send(200, {"results": search_podcasts(
+                    data.get("query", ""),
+                    data.get("country", "us"),
+                    data.get("limit", 24),
+                )})
             if route == "/api/feed":
                 self._require_auth(data)
                 self._send(200, parse_feed(http_get(data["feedUrl"], accept="application/rss+xml,application/xml,text/xml,*/*"),
@@ -794,6 +870,8 @@ class Handler(BaseHTTPRequestHandler):
             where = "上游服務"
             if self.path.startswith("/api/feed"):
                 where = "RSS feed"
+            elif self.path.startswith("/api/search"):
+                where = "Podcast 目錄"
             elif self.path.startswith("/api/transcript"):
                 where = "字幕檔"
             elif self.path.startswith("/api/transcribe") or self.path.startswith("/api/job"):
