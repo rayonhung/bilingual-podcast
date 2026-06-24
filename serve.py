@@ -725,10 +725,15 @@ def job_start(data):
             "audioPath": audio_path,
             "audioSize": len(audio),
             "audioType": mimetypes.guess_type(name)[0] or "audio/mpeg",
+            "audioToken": os.urandom(18).hex(),
         }
+        audio_token = JOBS[job_id]["audioToken"]
     return {"jobId": job_id, "count": len(chunks),
             "starts": [round(t, 3) for _, t in chunks],
-            "audioUrl": "/api/job_audio?jobId=" + job_id}
+            "audioUrl": "/api/job_audio?" + urllib.parse.urlencode({
+                "jobId": job_id,
+                "token": audio_token,
+            })}
 
 def job_chunk(data):
     """轉錄某一段，回傳該段的字幕（時間軸已接回整集）。翻譯由前端分批處理。"""
@@ -947,6 +952,8 @@ def start_background_job(data, key):
 # HTTP handler
 # ----------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *a):  # 安靜一點
         pass
 
@@ -1034,13 +1041,15 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             upstream.close()
 
-    def _serve_job_audio(self, job_id):
+    def _serve_job_audio(self, job_id, token="", head_only=False):
         with JOBS_LOCK:
             job = JOBS.get(job_id)
             if job:
                 job["ts"] = time.time()
         if not job or not os.path.isfile(job.get("audioPath", "")):
             return self._send(404, {"error": "這份同步音訊已過期，請重新點選這一集。"})
+        if not token or token != job.get("audioToken"):
+            return self._send(403, {"error": "同步音訊存取權限已失效，請重新點選這一集。"})
 
         size = int(job["audioSize"])
         start, end = 0, size - 1
@@ -1072,6 +1081,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
         self.send_header("Cache-Control", "private, max-age=1800")
         self.end_headers()
+        if head_only:
+            return
         try:
             with open(job["audioPath"], "rb") as f:
                 f.seek(start)
@@ -1087,6 +1098,19 @@ class Handler(BaseHTTPRequestHandler):
                     remaining -= len(chunk)
         except FileNotFoundError:
             return
+
+    def do_HEAD(self):
+        path = self.path.split("?")[0]
+        if path == "/api/job_audio":
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            return self._serve_job_audio(
+                (qs.get("jobId") or [""])[0],
+                (qs.get("token") or [""])[0],
+                head_only=True,
+            )
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -1114,10 +1138,11 @@ class Handler(BaseHTTPRequestHandler):
             except urllib.error.URLError as e:
                 self._send(502, {"error": "連不上音檔來源：%s" % e.reason})
         elif path == "/api/job_audio":
-            if APP_PASSWORD and not self._authed():
-                return self._send(401, {"error": "請先輸入 App 密碼。"})
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            self._serve_job_audio((qs.get("jobId") or [""])[0])
+            self._serve_job_audio(
+                (qs.get("jobId") or [""])[0],
+                (qs.get("token") or [""])[0],
+            )
         else:
             self._send(404, {"error": "not found"})
 
