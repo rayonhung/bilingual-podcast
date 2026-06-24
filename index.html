@@ -210,21 +210,60 @@ const CHUNK_TIMEOUT_MS = 180000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
 const CACHE_PREFIX = "tx_v7_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
+async function parseApiResponse(r){
+  const text = await r.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(e){
+      const type = (r.headers.get("content-type") || "").toLowerCase();
+      const renderPage = /<!doctype|<html|application loading|render/i.test(text);
+      const detail = renderPage
+        ? "Render 暫時回傳了網頁而不是 API 資料，服務可能正在喚醒或剛剛中斷。"
+        : (type ? "伺服器回傳了無法解析的內容（"+type+"）。" : "伺服器回傳了無法解析的內容。");
+      throw new Error((r.ok ? "" : "HTTP "+r.status+"：") + detail);
+    }
+  }
+  if(!r.ok) throw new Error((data && data.error) || ("HTTP "+r.status));
+  if(data === null) throw new Error("伺服器沒有回傳資料。");
+  return data;
+}
 const apiGet = (path, timeoutMs=30000) => {
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
   return fetch(path, {signal:ctrl.signal, credentials:"same-origin"})
-    .then(async r => { const j = await r.json(); if(!r.ok) throw new Error(j.error||("HTTP "+r.status)); return j; })
+    .then(parseApiResponse)
     .finally(()=>clearTimeout(timer));
 };
 const api = (path, body, timeoutMs=120000) => {
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
   return fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:ctrl.signal, credentials:"same-origin"})
-    .then(async r => { const j = await r.json(); if(!r.ok) throw new Error(j.error||("HTTP "+r.status)); return j; })
+    .then(parseApiResponse)
     .catch(err => { if(err.name==="AbortError") throw new Error("請求逾時，稍後可重試這一段。"); throw err; })
     .finally(()=>clearTimeout(timer));
 };
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function startFeedJob(audioUrl, timeoutMs=180000){
+  let lastErr;
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      return await api("/api/job_start", {
+        audioUrl,
+        model:$("quality").value,
+        key:groqKey()
+      }, timeoutMs);
+    }catch(err){
+      lastErr = err;
+      const transient = /Render 暫時|HTTP 50[234]|請求逾時|Failed to fetch|網路連線/i.test(err.message || "");
+      if(!transient || attempt===1) throw err;
+      setStatus("Render 剛剛暫時中斷，正在自動重試音檔準備…", null);
+      await wait(1800);
+    }
+  }
+  throw lastErr;
+}
 
 // key persistence
 const savedKey = localStorage.getItem("groq_key");
@@ -525,7 +564,7 @@ async function reprocessCurrent(){
   hideRetry(); hideReprocess();
   try{
     setStatus("準備音檔…（重新處理）", null);
-    const job = await api("/api/job_start", {audioUrl:currentSrc, model:$("quality").value, key:groqKey()});
+    const job = await startFeedJob(currentSrc);
     await runJob(job, currentTitle || "Podcast", currentSrc, activeCacheKey);
   }catch(err){
     backToSetup();
@@ -538,11 +577,7 @@ async function refreshJobForRetry(){
     throw new Error("這是上傳檔案的舊工作階段，重啟後無法重建音檔；請重新上傳一次。");
   }
   setMore("工作階段已過期，正在重新準備音檔，只補失敗段落…", false);
-  const job = await api("/api/job_start", {
-    audioUrl:currentSrc,
-    model:$("quality").value,
-    key:groqKey()
-  }, 600000);
+  const job = await startFeedJob(currentSrc, 600000);
   activeJob = job;
   return job;
 }
@@ -608,33 +643,47 @@ async function retryFailedChunks(){
 async function processEpisode(ep){
   hideErr();
   if(!(await ensureAccess())) return;
+  let stage = "檢查單集資料";
   ep = {...ep, audio:absoluteUrl(ep.audio), transcript:absoluteUrl(ep.transcript)};
+  if(!/^https?:\/\//i.test(ep.audio)) {
+    showErr("這一集沒有有效的音檔網址，請換一集或換一個 RSS feed。");
+    return;
+  }
   const cacheKey = CACHE_PREFIX+ep.audio+"_"+$("lang").value;
   activeCacheKey = cacheKey; currentTitle = ep.title; currentSrc = ep.audio; currentMode = "feed";
   try{
+    stage = "讀取上次結果";
     const cached = localStorage.getItem(cacheKey);
     if(cached){ restoreCached(cached, ep.title, ep.audio, cacheKey); return; }
   }catch(e){}
   try{
     if(ep.transcript){
       // 有現成字幕：一次抓完、一次翻完（很快，不必分段）
+      stage = "讀取節目字幕";
       setStatus("讀取節目附的字幕…（這集不用轉錄，超快）", null);
       const r = await api("/api/transcript", {url:ep.transcript, type:ep.transcriptType});
       const segs = r.segments;
       if(!segs || !segs.length) throw new Error("字幕檔是空的，改用轉錄試試。");
+      stage = "開啟播放器";
       startPlayer(ep.title, ep.audio, "用節目附的字幕（翻譯中…）");
       setMore("字幕翻譯完成後即可播放", false);
+      stage = "翻譯字幕";
       await translateSegs(segs, (t)=>setMore(t), (chunk)=>appendSegments(chunk));
       setMore("");
       $("srcnote").textContent = "字幕來源：用節目附的字幕";
       persist(cacheKey);
     }else{
       // 需轉錄：下載＋切段，再逐段交付
+      stage = "下載並準備音檔";
       setStatus("準備音檔…（下載＋分段）", null);
-      const job = await api("/api/job_start", {audioUrl:ep.audio, model:$("quality").value, key:groqKey()});
+      const job = await startFeedJob(ep.audio);
+      stage = "開啟播放器與轉錄";
       await runJob(job, ep.title, ep.audio, cacheKey);
     }
-  }catch(err){ backToSetup(); showErr(err.message); }
+  }catch(err){
+    backToSetup();
+    showErr(stage+"失敗："+(err && err.message ? err.message : String(err)));
+  }
 }
 
 async function handleFile(file){
@@ -691,8 +740,12 @@ function startPlayer(name, src, source){
 
   $("cur").textContent="0:00"; $("dur").textContent="載入中";
   $("scrub").value=0;
+  audio.pause();
   audio.removeAttribute("crossorigin");
-  audio.src = audioSrc(src); audio.load();
+  audio.removeAttribute("src");
+  try{ audio.load(); }catch(e){}
+  audio.preload = "metadata";
+  audio.setAttribute("src", audioSrc(src));
   lastActive=-1; autoScroll=true; $("jumpback").style.display="none";
 }
 
