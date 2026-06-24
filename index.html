@@ -691,21 +691,30 @@ function showReprocess(text){
 }
 function hideReprocess(){ $("reprocessBtn").style.display="none"; }
 
-// 把一批字幕送去翻譯（每 25 句一批）；report(text,pct) 負責回報進度
+// 每批 12 句、最多兩批並行；伺服器會驗證品質並在需要時升級模型。
 async function translateSegs(segs, report, onBatch){
-  const target = $("lang").value, key = groqKey(), BATCH=6;
-  for(let i=0;i<segs.length;i+=BATCH){
-    const chunk = segs.slice(i,i+BATCH);
-    report("翻譯中… "+Math.min(i+BATCH,segs.length)+" / "+segs.length+" 句", Math.round((i/segs.length)*100));
-    let r, lastErr;
-    for(let attempt=0;attempt<4;attempt++){
-      try{ r = await api("/api/translate", {texts:chunk.map(s=>s.text), target, key}, 120000); break; }
-      catch(err){ lastErr=err; if(attempt<3) await new Promise(res=>setTimeout(res, 1200*(attempt+1))); }
+  const target = $("lang").value, key = groqKey(), BATCH=12;
+  const batches=[];
+  for(let i=0;i<segs.length;i+=BATCH) batches.push(segs.slice(i,i+BATCH));
+  let next=0, completed=0;
+  async function worker(){
+    while(next<batches.length){
+      const chunk=batches[next++];
+      report("翻譯中… "+completed+" / "+segs.length+" 句", Math.round((completed/segs.length)*100));
+      let r, lastErr;
+      for(let attempt=0;attempt<3;attempt++){
+        try{ r = await api("/api/translate", {texts:chunk.map(s=>s.text), target, key}, 120000); break; }
+        catch(err){ lastErr=err; if(attempt<2) await new Promise(res=>setTimeout(res, 1200*(attempt+1))); }
+      }
+      if(!r) throw lastErr || new Error("翻譯失敗");
+      chunk.forEach((s,j)=> s.trans = (r.t&&r.t[j])||"");
+      completed+=chunk.length;
+      report("翻譯中… "+completed+" / "+segs.length+" 句", Math.round((completed/segs.length)*100));
+      if(onBatch) onBatch(chunk);
     }
-    if(!r) throw lastErr || new Error("翻譯失敗");
-    chunk.forEach((s,j)=> s.trans = (r.t&&r.t[j])||"");
-    if(onBatch) onBatch(chunk);
   }
+  const workers=Array.from({length:Math.min(2,batches.length)},()=>worker());
+  await Promise.all(workers);
 }
 
 function persist(cacheKey){

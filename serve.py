@@ -14,6 +14,7 @@
 """
 
 import json, os, re, sys, time, base64, hashlib, threading, webbrowser, urllib.request, urllib.error, urllib.parse, subprocess, tempfile, shutil, html, mimetypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8000
@@ -688,18 +689,23 @@ def _translation_payload(texts, target, model, strict_json=True, individual=Fals
 
 def groq_translate(texts, target, key):
     last_err = None
-    for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
-        for strict_json in (True, False):
-            try:
-                result = _groq_translate_payload(
-                    _translation_payload(texts, target, model, strict_json),
-                    key,
-                    len(texts),
-                )
-                return validate_translations(texts, result, target)
-            except Exception as e:
-                last_err = e
-                continue
+    # 先用低延遲模型；格式或翻譯品質不合格時，再升級到 70B。
+    attempts = (
+        ("llama-3.1-8b-instant", True),
+        ("llama-3.3-70b-versatile", True),
+        ("llama-3.3-70b-versatile", False),
+    )
+    for model, strict_json in attempts:
+        try:
+            result = _groq_translate_payload(
+                _translation_payload(texts, target, model, strict_json),
+                key,
+                len(texts),
+            )
+            return validate_translations(texts, result, target)
+        except Exception as e:
+            last_err = e
+            continue
     # 批次模式偶爾會漏翻其中一句；最後把句子拆開，用較強模型逐句補救。
     repaired = []
     try:
@@ -984,23 +990,34 @@ def run_background_job(background_id, data, key):
                     })
 
                 segs = result.get("segments", [])
-                translated = []
-                for start in range(0, len(segs), 6):
-                    batch = segs[start:start + 6]
-                    update_background_job(
-                        background_id,
-                        stage="translating",
-                        message="第 %d / %d 段，翻譯 %d / %d 句…" % (
-                            idx + 1, total_chunks, min(start + 6, len(segs)), len(segs)
-                        ),
-                        progress=round(((idx + 0.65) / total_chunks) * 90),
-                    )
+                batch_size = 12
+                batches = [segs[start:start + batch_size]
+                           for start in range(0, len(segs), batch_size)]
+
+                def translate_batch(batch):
                     translations = groq_translate([s["text"] for s in batch], target, key)
+                    translated_batch = []
                     for seg, translated_text in zip(batch, translations):
                         item = dict(seg)
                         item["trans"] = translated_text
-                        translated.append(item)
-                    append_background_segments(background_id, translated[-len(batch):])
+                        translated_batch.append(item)
+                    return translated_batch
+
+                completed_sentences = 0
+                with ThreadPoolExecutor(max_workers=min(2, max(1, len(batches)))) as pool:
+                    futures = [pool.submit(translate_batch, batch) for batch in batches]
+                    for future in as_completed(futures):
+                        translated_batch = future.result()
+                        completed_sentences += len(translated_batch)
+                        append_background_segments(background_id, translated_batch)
+                        update_background_job(
+                            background_id,
+                            stage="translating",
+                            message="第 %d / %d 段，翻譯 %d / %d 句…" % (
+                                idx + 1, total_chunks, completed_sentences, len(segs)
+                            ),
+                            progress=round(((idx + 0.65) / total_chunks) * 90),
+                        )
                 set_background_chunk_state(background_id, idx, "done")
             except Exception as e:
                 failed.append(idx)
