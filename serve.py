@@ -424,31 +424,56 @@ def ffmpeg_duration(path):
         raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffprobe failed")
     return float(p.stdout.decode("utf-8", "replace").strip())
 
-def normalize_audio_for_playback(audio_bytes, filename):
-    """把來源音訊標準化成 Safari 穩定支援的 MP3，並讓播放與轉錄共用同一份檔案。"""
-    if not has_cmd("ffmpeg"):
-        return audio_bytes, filename
+def sniff_audio_type(audio_bytes, filename):
+    """從實際檔頭判斷播放器 MIME，避免動態音訊網址沒有副檔名時被標成錯誤格式。"""
+    head = audio_bytes[:16]
+    if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xff and (head[1] & 0xe0) == 0xe0):
+        return "audio/mpeg", ".mp3"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return "audio/mp4", ".m4a"
+    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
+        return "audio/wav", ".wav"
+    if head.startswith(b"OggS"):
+        return "audio/ogg", ".ogg"
+    guessed = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     suffix = os.path.splitext(filename.split("?")[0])[1] or ".audio"
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, "source" + suffix)
-            out = os.path.join(td, "playback.mp3")
-            with open(src, "wb") as f:
-                f.write(audio_bytes)
-            p = subprocess.run([
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                "-i", src, "-vn", "-ac", "2", "-ar", "44100", "-b:a", "96k", out,
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if p.returncode:
-                raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")
-            with open(out, "rb") as f:
-                normalized = f.read()
-            if normalized:
-                base = os.path.splitext(os.path.basename(filename.split("?")[0]))[0] or "podcast"
-                return normalized, base + ".mp3"
-    except Exception as e:
-        print("[job] 音訊標準化失敗，沿用原始格式：%s" % e, flush=True)
-    return audio_bytes, filename
+    return guessed, suffix
+
+def lazy_ffmpeg_chunk_plan(audio_path):
+    """只分析長度並建立切段時間表，不預先轉碼所有段落。"""
+    if not (has_cmd("ffmpeg") and has_cmd("ffprobe")):
+        return None
+    total = ffmpeg_duration(audio_path)
+    if not total or total <= 0:
+        return None
+    chunks = []
+    start = 0.0
+    idx = 0
+    while start < total - 0.1:
+        limit = FIRST_CHUNK_SECONDS if idx == 0 else CHUNK_SECONDS
+        duration = min(limit, total - start)
+        chunks.append({"start": start, "duration": duration})
+        if start + duration >= total:
+            break
+        start = max(0.0, start + duration - CHUNK_OVERLAP_SECONDS)
+        idx += 1
+    return chunks
+
+def render_lazy_chunk(audio_path, chunk):
+    """輪到該段轉錄時才轉成單聲道 MP3，避免開始前先轉完整集。"""
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as out:
+        args = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", "%.3f" % chunk["start"],
+            "-t", "%.3f" % chunk["duration"],
+            "-i", audio_path,
+            "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", out.name,
+        ]
+        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if p.returncode:
+            raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffmpeg 切段失敗")
+        out.seek(0)
+        return out.read()
 
 def ffmpeg_chunks(audio_bytes, filename, max_seconds=None, first_max_seconds=None, overlap_seconds=0):
     """
@@ -683,22 +708,20 @@ def explain_http_error(where, e):
 # ----------------------------------------------------------------------------
 # 逐段交付：先下載＋切段（job_start），再讓前端一段一段要轉錄結果（job_chunk）
 # ----------------------------------------------------------------------------
-def job_start(data):
+def job_start(data, progress=None):
     """下載（或收下上傳的）音檔、切段、暫存在記憶體，回傳每段的起始時間。"""
+    progress = progress or (lambda message, pct: None)
     if data.get("audioB64"):
         audio = base64.b64decode(data["audioB64"])
         name = data.get("filename", "audio.mp3")
     else:
+        progress("正在下載完整音訊…", 1)
         audio = http_get(data["audioUrl"], timeout=600, accept="audio/*,application/octet-stream,*/*")
         name = data["audioUrl"].split("?")[0].split("/")[-1] or "audio.mp3"
-    audio, name = normalize_audio_for_playback(audio, name)
-    print("[job] 已下載 %.1f MB，開始切段…" % (len(audio) / 1024 / 1024), flush=True)
-    chunks = split_audio(audio, name)
-    if not chunks:
-        raise ValueError("這集音檔超過 25MB，又不是能自動切段的 MP3 格式。請改用 MP3，或先剪成短一點的片段。")
-    print("[job] 切成 %d 段，準備逐段轉錄" % len(chunks), flush=True)
+    audio_type, suffix = sniff_audio_type(audio, name)
+    print("[job] 已下載 %.1f MB，快速分析時間軸…" % (len(audio) / 1024 / 1024), flush=True)
+    progress("音訊下載完成，正在快速分析時間軸…", 2)
     job_id = hashlib.sha1(("%s|%s|%d|%f" % (data.get("audioUrl", ""), name, len(audio), time.time())).encode()).hexdigest()[:16]
-    suffix = os.path.splitext(name.split("?")[0])[1] or ".mp3"
     fd, audio_path = tempfile.mkstemp(prefix="bpp_%s_" % job_id, suffix=suffix)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -710,6 +733,19 @@ def job_start(data):
             pass
         delete_job({"audioPath": audio_path})
         raise
+    chunks = None
+    try:
+        chunks = lazy_ffmpeg_chunk_plan(audio_path)
+    except Exception as e:
+        print("[job] 快速時間軸分析失敗，改用舊切段方式：%s" % e, flush=True)
+    if not chunks:
+        chunks = split_audio(audio, name)
+    if not chunks:
+        delete_job({"audioPath": audio_path})
+        raise ValueError("這集音檔無法建立轉錄段落，請換一集或稍後再試。")
+    lazy_chunks = bool(chunks and isinstance(chunks[0], dict))
+    print("[job] 建立 %d 段時間表，播放器可立即使用" % len(chunks), flush=True)
+    progress("音訊已可播放，背景字幕開始處理…", 3)
     now = time.time()
     with JOBS_LOCK:
         # 清掉太舊的，再限制最多保留幾個，避免記憶體一直長大
@@ -724,12 +760,13 @@ def job_start(data):
             "ts": now,
             "audioPath": audio_path,
             "audioSize": len(audio),
-            "audioType": mimetypes.guess_type(name)[0] or "audio/mpeg",
+            "audioType": audio_type,
             "audioToken": os.urandom(18).hex(),
+            "lazyChunks": lazy_chunks,
         }
         audio_token = JOBS[job_id]["audioToken"]
     return {"jobId": job_id, "count": len(chunks),
-            "starts": [round(t, 3) for _, t in chunks],
+            "starts": [round(c["start"], 3) if isinstance(c, dict) else round(c[1], 3) for c in chunks],
             "audioUrl": "/api/job_audio?" + urllib.parse.urlencode({
                 "jobId": job_id,
                 "token": audio_token,
@@ -746,7 +783,12 @@ def job_chunk(data):
     idx = int(data["index"])
     if idx < 0 or idx >= len(job["chunks"]):
         raise ValueError("段落索引超出範圍，請重新點選這一集。")
-    chunk, t0 = job["chunks"][idx]
+    chunk_spec = job["chunks"][idx]
+    if isinstance(chunk_spec, dict):
+        chunk = render_lazy_chunk(job["audioPath"], chunk_spec)
+        t0 = chunk_spec["start"]
+    else:
+        chunk, t0 = chunk_spec
     base = os.path.splitext(os.path.basename(job["name"].split("?")[0]))[0] or "audio"
     attempts = max(1, min(3, int(data.get("attempts", 3))))
     print("[job] 轉錄第 %d/%d 段…" % (idx + 1, len(job["chunks"])), flush=True)
@@ -818,7 +860,14 @@ def run_background_job(background_id, data, key):
             message="正在下載並準備同步音訊…",
             progress=1,
         )
-        audio_job = job_start({"audioUrl": data["audioUrl"]})
+        audio_job = job_start(
+            {"audioUrl": data["audioUrl"]},
+            progress=lambda message, pct: update_background_job(
+                background_id,
+                message=message,
+                progress=pct,
+            ),
+        )
         update_background_job(
             background_id,
             audioJob=audio_job,
@@ -1123,7 +1172,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/config":
             self._send(200, {"serverKey": bool(SERVER_GROQ_KEY),
                              "passwordRequired": bool(APP_PASSWORD),
-                             "authed": self._authed()})
+                             "authed": self._authed(),
+                             "audioPipeline": "lazy-chunks-v1"})
         elif path == "/api/audio":
             if APP_PASSWORD and not self._authed():
                 return self._send(401, {"error": "請先輸入 App 密碼。"})
