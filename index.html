@@ -98,6 +98,14 @@
   .seg.active::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--accent)}
   .seg.active .orig{opacity:1;font-weight:500}
   .seg.active .trans{opacity:1;color:var(--ink)}
+  .timeline-gap{margin:10px 14px;padding:13px 14px;border:1px dashed #AFC8C2;border-radius:10px;
+    background:rgba(232,242,239,.62);color:var(--ink-soft);transition:background .15s,border-color .15s}
+  .timeline-gap .gap-title{font-size:14px;font-weight:700;color:var(--accent)}
+  .timeline-gap .gap-detail{font-size:12.5px;line-height:1.55;margin-top:3px;color:var(--ink-faint)}
+  .timeline-gap.failed{border-style:solid;border-color:#EBC9B6;background:#FBEEE7}
+  .timeline-gap.failed .gap-title{color:var(--warn)}
+  .timeline-gap.active-gap{border-style:solid;border-color:var(--accent);background:var(--card);
+    box-shadow:0 1px 0 var(--line)}
 
   .jumpback{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:45;background:var(--ink);color:#fff;padding:9px 16px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18);display:none;align-items:center;gap:7px;cursor:pointer}
   .readytoast{position:fixed;left:50%;bottom:104px;transform:translate(-50%,16px);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:24px;font-size:13px;font-weight:650;box-shadow:0 8px 24px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap}
@@ -616,6 +624,7 @@ function renderEpisodes(eps){
 // ---------- shared state ----------
 let segments = [];
 let activeJob = null, activeCacheKey = "", failedChunks = [];
+let timelineState = {status:"idle", message:"", chunkStates:[], currentChunk:-1};
 let runId = 0;
 let currentTitle = "", currentSrc = "", currentMode = "";
 let audio = $("audio");
@@ -716,13 +725,17 @@ function restoreCached(raw, title, src, cacheKey){
   }
   activeCacheKey = cacheKey || activeCacheKey;
   startPlayer(title, Array.isArray(data) ? src : data.job.audioUrl, "讀取上次的同步結果", !Array.isArray(data));
+  if(!Array.isArray(data)){
+    activeJob = data.job || null;
+    failedChunks = data.failedChunks || [];
+    timelineState = {status:"done", message:"", chunkStates:[], currentChunk:-1};
+  }
   appendSegments(segs);
   if(Array.isArray(data)){
     showReprocess("這是舊版快取，沒有保存失敗段落清單；點此重新處理一次。");
   }else{
-    activeJob = data.job || null;
-    failedChunks = data.failedChunks || [];
     if(pruneResolvedFailures(activeJob)) persist(activeCacheKey);
+    renderSegments();
     if(activeJob && failedChunks.length){
       showRetry("上次有 "+failedChunks.length+" 段失敗 · 點此只重試失敗段落");
     }
@@ -776,6 +789,12 @@ async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
     if(myRun!==runId) return;
 
     if(state.audioJob && state.audioJob.jobId) activeJob=state.audioJob;
+    timelineState={
+      status:state.status || "running",
+      message:state.message || "",
+      chunkStates:state.chunkStates || [],
+      currentChunk:Number.isInteger(state.currentChunk) ? state.currentChunk : -1
+    };
     const incoming=state.segments || [];
     if(!playerStarted && activeJob && activeJob.audioUrl){
       startPlayer(title, activeJob.audioUrl, "伺服器背景處理（實際播放音訊，含廣告）", false);
@@ -783,6 +802,7 @@ async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
       setMore("音訊已可先播放，雙語字幕由伺服器繼續背景處理…", false);
     }
     if(playerStarted && incoming.length) appendSegments(incoming);
+    else if(playerStarted) renderSegments();
     since=Number(state.totalSegments || since);
     localStorage.setItem(backgroundStorageKey(cacheKey), JSON.stringify({
       backgroundJobId,
@@ -799,6 +819,7 @@ async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
 
     if(state.status==="done"){
       failedChunks=state.failedChunks || [];
+      renderSegments();
       if(!playerStarted || !segments.length) throw new Error("背景工作完成，但沒有可顯示的字幕。");
       if(failedChunks.length){
         showRetry("背景處理完成，但有 "+failedChunks.length+" 段失敗 · 點此重試");
@@ -915,6 +936,7 @@ async function reprocessCurrent(){
   audio.pause();
   segments = [];
   failedChunks = [];
+  timelineState = {status:"idle", message:"", chunkStates:[], currentChunk:-1};
   hideRetry(); hideReprocess();
   try{
     await startOrResumeBackground(
@@ -1061,6 +1083,7 @@ function startPlayer(name, src, source, fromCache=false){
   hideRetry(); hideReprocess();
 
   segments = [];
+  timelineState = {status:"running", message:"字幕背景處理中…", chunkStates:[], currentChunk:-1};
   const p=$("player");
   [...p.querySelectorAll(".lines")].forEach(n=>n.remove());
   const cont = document.createElement("div");
@@ -1114,7 +1137,58 @@ function renderSegments(){
   const cont = $("lines");
   if(!cont) return;
   cont.innerHTML = "";
-  segments.forEach((s,i)=>{
+  const starts = activeJob && Array.isArray(activeJob.starts) ? activeJob.starts.map(Number) : [];
+  const chunkEnd = i => starts[i+1] ?? (Number.isFinite(audio.duration) ? audio.duration : starts[i]+180);
+  const items = segments.map((s,i)=>({type:"segment", start:Number(s.start||0), segment:s, index:i}));
+
+  const failedSet = new Set(failedChunks);
+  (timelineState.chunkStates || []).forEach((state,i)=>{
+    if(state==="failed") failedSet.add(i);
+  });
+  failedSet.forEach(i=>{
+    if(Number.isFinite(starts[i])){
+      items.push({type:"failed", start:starts[i], end:chunkEnd(i), chunk:i});
+    }
+  });
+
+  const lastEnd = segments.reduce((max,s)=>Math.max(max,Number(s.end||s.start||0)),0);
+  const processing = timelineState.currentChunk;
+  if(timelineState.status!=="done" && timelineState.status!=="error" && activeJob){
+    items.push({
+      type:"pending",
+      start:lastEnd,
+      end:Number.isFinite(audio.duration) ? audio.duration : Infinity,
+      chunk:processing
+    });
+  }
+  items.sort((a,b)=>a.start-b.start || (a.type==="segment" ? -1 : 1));
+
+  items.forEach(item=>{
+    if(item.type!=="segment"){
+      const d=document.createElement("div");
+      d.className="timeline-gap "+(item.type==="failed" ? "failed" : "pending");
+      d.dataset.start=String(item.start);
+      d.dataset.end=String(item.end);
+      const title=document.createElement("div");
+      title.className="gap-title";
+      const detail=document.createElement("div");
+      detail.className="gap-detail";
+      if(item.type==="failed"){
+        title.textContent="這一段字幕處理失敗";
+        detail.textContent="約 "+fmt(item.start)+" 起的內容尚無字幕。背景處理完成後可單獨重試。";
+        d.addEventListener("click", ()=>{ if(failedChunks.length) retryFailedChunks(); });
+      }else{
+        title.textContent="後續字幕處理中";
+        const progress = item.chunk>=0 && activeJob.count
+          ? "正在處理第 "+(item.chunk+1)+" / "+activeJob.count+" 段"
+          : "伺服器正在準備下一批字幕";
+        detail.textContent="目前字幕完成至 "+fmt(lastEnd)+" · "+progress+"。音訊可以繼續播放。";
+      }
+      d.append(title,detail);
+      cont.appendChild(d);
+      return;
+    }
+    const s=item.segment, i=item.index;
     const d=document.createElement("div"); d.className="seg"; d.dataset.i=i;
     d.innerHTML='<div class="orig"></div><div class="trans"></div>';
     d.querySelector(".orig").textContent = s.text;
@@ -1122,6 +1196,8 @@ function renderSegments(){
     d.addEventListener("click", ()=>{ audio.currentTime=s.start; audio.play(); });
     cont.appendChild(d);
   });
+  lastActive=-1;
+  lastTimelineGap=null;
 }
 
 const playBtn=$("playBtn"), playIconPath=document.querySelector("#playIcon path");
@@ -1183,17 +1259,36 @@ document.addEventListener("visibilitychange", ()=>{
   if(!document.hidden) document.title=defaultPageTitle;
 });
 
-let lastActive=-1, autoScroll=true;
+let lastActive=-1, lastTimelineGap=null, autoScroll=true;
 audio.addEventListener("timeupdate", ()=>{
   $("cur").textContent=fmt(audio.currentTime);
   if(audio.duration) $("scrub").value=(audio.currentTime/audio.duration)*100;
   const t=audio.currentTime; let idx=-1;
   for(let i=0;i<segments.length;i++){ if(t>=segments[i].start && t<segments[i].end){idx=i;break;} if(t<segments[i].start) break; }
   if(idx!==-1 && idx!==lastActive){
-    const segs=document.querySelectorAll(".seg");
-    if(segs[lastActive]) segs[lastActive].classList.remove("active");
-    if(segs[idx]){ segs[idx].classList.add("active"); if(autoScroll) segs[idx].scrollIntoView({behavior:"smooth",block:"center"}); }
+    const previous=document.querySelector(".seg.active");
+    if(previous) previous.classList.remove("active");
+    if(lastTimelineGap) lastTimelineGap.classList.remove("active-gap");
+    lastTimelineGap=null;
+    const seg=document.querySelector('.seg[data-i="'+idx+'"]');
+    if(seg){ seg.classList.add("active"); if(autoScroll) seg.scrollIntoView({behavior:"smooth",block:"center"}); }
     lastActive=idx;
+  }else if(idx===-1){
+    const previous=document.querySelector(".seg.active");
+    if(previous) previous.classList.remove("active");
+    lastActive=-1;
+    const gap=[...document.querySelectorAll(".timeline-gap")].find(el=>{
+      const start=Number(el.dataset.start), end=Number(el.dataset.end);
+      return t>=start && t<end;
+    });
+    if(gap!==lastTimelineGap){
+      if(lastTimelineGap) lastTimelineGap.classList.remove("active-gap");
+      lastTimelineGap=gap || null;
+      if(lastTimelineGap){
+        lastTimelineGap.classList.add("active-gap");
+        if(autoScroll) lastTimelineGap.scrollIntoView({behavior:"smooth",block:"center"});
+      }
+    }
   }
 });
 $("scrub").addEventListener("input", ()=>{ if(audio.duration) audio.currentTime=($("scrub").value/100)*audio.duration; });
@@ -1210,7 +1305,7 @@ function pauseScroll(){
 }
 window.addEventListener("wheel", pauseScroll, {passive:true});
 window.addEventListener("touchmove", pauseScroll, {passive:true});
-$("jumpback").addEventListener("click", ()=>{ autoScroll=true; $("jumpback").style.display="none"; const a=document.querySelector(".seg.active"); if(a) a.scrollIntoView({behavior:"smooth",block:"center"}); });
+$("jumpback").addEventListener("click", ()=>{ autoScroll=true; $("jumpback").style.display="none"; const a=document.querySelector(".seg.active,.timeline-gap.active-gap"); if(a) a.scrollIntoView({behavior:"smooth",block:"center"}); });
 
 $("backBtn").addEventListener("click", ()=>{ audio.pause(); backToSetup(); lastActive=-1; autoScroll=true; });
 $("more").addEventListener("click", ()=>{

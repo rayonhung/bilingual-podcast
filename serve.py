@@ -877,6 +877,8 @@ def background_job_snapshot(background_id, since=0):
             "segments": [dict(s) for s in segments[since:]],
             "totalSegments": len(segments),
             "failedChunks": list(job.get("failedChunks", [])),
+            "chunkStates": list(job.get("chunkStates", [])),
+            "currentChunk": job.get("currentChunk", -1),
             "audioJob": audio_job,
             "error": job.get("error", ""),
         }
@@ -908,6 +910,21 @@ def append_background_segments(background_id, segs):
         job["ts"] = time.time()
 
 
+def set_background_chunk_state(background_id, index, state):
+    with BACKGROUND_JOBS_LOCK:
+        job = BACKGROUND_JOBS.get(background_id)
+        if not job:
+            return
+        states = job.setdefault("chunkStates", [])
+        if 0 <= index < len(states):
+            states[index] = state
+        if state == "processing":
+            job["currentChunk"] = index
+        elif job.get("currentChunk") == index:
+            job["currentChunk"] = -1
+        job["ts"] = time.time()
+
+
 def run_background_job(background_id, data, key):
     try:
         update_background_job(
@@ -928,6 +945,8 @@ def run_background_job(background_id, data, key):
         update_background_job(
             background_id,
             audioJob=audio_job,
+            chunkStates=["pending"] * int(audio_job["count"]),
+            currentChunk=-1,
             stage="transcribing",
             message="同步音訊已準備完成，開始背景轉錄…",
             progress=3,
@@ -938,6 +957,7 @@ def run_background_job(background_id, data, key):
         model = data.get("model") or "whisper-large-v3-turbo"
         target = data.get("target") or "繁體中文（台灣用語）"
         for idx in range(total_chunks):
+            set_background_chunk_state(background_id, idx, "processing")
             update_background_job(
                 background_id,
                 stage="transcribing",
@@ -981,8 +1001,10 @@ def run_background_job(background_id, data, key):
                         item["trans"] = translated_text
                         translated.append(item)
                     append_background_segments(background_id, translated[-len(batch):])
+                set_background_chunk_state(background_id, idx, "done")
             except Exception as e:
                 failed.append(idx)
+                set_background_chunk_state(background_id, idx, "failed")
                 update_background_job(
                     background_id,
                     failedChunks=list(failed),
@@ -1002,6 +1024,7 @@ def run_background_job(background_id, data, key):
             message=message,
             progress=100,
             failedChunks=list(failed),
+            currentChunk=-1,
         )
     except Exception as e:
         update_background_job(
@@ -1039,6 +1062,8 @@ def start_background_job(data, key):
             "progress": 0,
             "segments": [],
             "failedChunks": [],
+            "chunkStates": [],
+            "currentChunk": -1,
             "audioJob": {},
             "audioUrl": data.get("audioUrl", ""),
             "target": data.get("target", ""),
