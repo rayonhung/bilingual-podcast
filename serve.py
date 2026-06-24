@@ -638,24 +638,81 @@ def groq_transcribe_with_curl(audio_bytes, filename, model, key, attempts=3, max
             time.sleep(1.5 * (n + 1))
     raise RuntimeError("Groq 轉錄失敗：" + last)
 
-def groq_translate(texts, target, key):
+def translation_looks_wrong(source, translated, target):
+    """擋下模型把英文原文直接當成中文翻譯回傳的情況。"""
+    source = (source or "").strip()
+    translated = (translated or "").strip()
+    if not source:
+        return False
+    if not translated:
+        return True
+    if not any(label in target for label in ("中文", "Chinese", "繁體", "简体")):
+        return False
+    latin_source = len(re.findall(r"[A-Za-z]", source))
+    if latin_source < 5:
+        return False
+    cjk_output = len(re.findall(r"[\u3400-\u9fff]", translated))
+    if cjk_output >= 2:
+        return False
+    source_norm = re.sub(r"\W+", "", source).lower()
+    output_norm = re.sub(r"\W+", "", translated).lower()
+    same_as_source = source_norm and output_norm == source_norm
+    mostly_english = len(re.findall(r"[A-Za-z]", translated)) >= max(5, len(translated) * 0.45)
+    return same_as_source or mostly_english
+
+def validate_translations(texts, translations, target):
+    bad = [i for i, (source, translated) in enumerate(zip(texts, translations))
+           if translation_looks_wrong(source, translated, target)]
+    if bad:
+        raise ValueError("模型未完成中文翻譯（第 %s 句仍為英文）" %
+                         "、".join(str(i + 1) for i in bad[:5]))
+    return translations
+
+def _translation_payload(texts, target, model, strict_json=True, individual=False):
+    extra = ""
+    if any(label in target for label in ("中文", "Chinese", "繁體", "简体")):
+        extra = (" Every non-empty English sentence MUST be translated into Chinese. "
+                 "Never copy the English source as the translation, except URLs and proper nouns.")
+    if individual:
+        extra += " Translate this single subtitle completely."
     sysp = ("You are a subtitle translator. Translate each line into natural, fluent " + target +
-            ". Keep meaning faithful and concise; do not merge or split lines. "
+            ". Keep meaning faithful and concise; do not merge or split lines." + extra + " "
             'Return ONLY a JSON object {"t":[...]} where t is an array of strings, '
             "exactly the same length and order as the input array.")
+    payload = {"model": model, "temperature": 0.1,
+               "messages": [{"role": "system", "content": sysp},
+                            {"role": "user", "content": json.dumps(texts, ensure_ascii=False)}]}
+    if strict_json:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+def groq_translate(texts, target, key):
     last_err = None
     for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
         for strict_json in (True, False):
-            payload = {"model": model, "temperature": 0.2,
-                       "messages": [{"role": "system", "content": sysp},
-                                    {"role": "user", "content": json.dumps(texts, ensure_ascii=False)}]}
-            if strict_json:
-                payload["response_format"] = {"type": "json_object"}
             try:
-                return _groq_translate_payload(payload, key, len(texts))
+                result = _groq_translate_payload(
+                    _translation_payload(texts, target, model, strict_json),
+                    key,
+                    len(texts),
+                )
+                return validate_translations(texts, result, target)
             except Exception as e:
                 last_err = e
                 continue
+    # 批次模式偶爾會漏翻其中一句；最後把句子拆開，用較強模型逐句補救。
+    repaired = []
+    try:
+        for text in texts:
+            result = _groq_translate_payload(
+                _translation_payload([text], target, "llama-3.3-70b-versatile", True, individual=True),
+                key,
+                1,
+            )
+            repaired.append(validate_translations([text], result, target)[0])
+        return repaired
+    except Exception as e:
+        last_err = e
     raise RuntimeError("Groq 翻譯失敗：" + str(last_err))
 
 def _parse_translation_content(content, expected):
@@ -1173,7 +1230,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"serverKey": bool(SERVER_GROQ_KEY),
                              "passwordRequired": bool(APP_PASSWORD),
                              "authed": self._authed(),
-                             "audioPipeline": "lazy-chunks-v1"})
+                             "audioPipeline": "lazy-chunks-v1",
+                             "translationPipeline": "validated-v1"})
         elif path == "/api/audio":
             if APP_PASSWORD and not self._authed():
                 return self._send(401, {"error": "請先輸入 App 密碼。"})
