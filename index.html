@@ -619,6 +619,7 @@ let runId = 0;
 let currentTitle = "", currentSrc = "", currentMode = "";
 let audio = $("audio");
 let audioReadyNotified = false, readyToastTimer = null;
+let playingCachedAudio = false, cachedAudioRecoveryInProgress = false;
 const defaultPageTitle = document.title;
 
 function setStatus(text, pct){
@@ -713,7 +714,7 @@ function restoreCached(raw, title, src, cacheKey){
     return false;
   }
   activeCacheKey = cacheKey || activeCacheKey;
-  startPlayer(title, Array.isArray(data) ? src : data.job.audioUrl, "讀取上次的同步結果");
+  startPlayer(title, Array.isArray(data) ? src : data.job.audioUrl, "讀取上次的同步結果", !Array.isArray(data));
   appendSegments(segs);
   if(Array.isArray(data)){
     showReprocess("這是舊版快取，沒有保存失敗段落清單；點此重新處理一次。");
@@ -733,7 +734,7 @@ async function runJob(job, title, src, cacheKey){
   const key=groqKey(), model=$("quality").value;
   const myRun = ++runId;
   activeJob = job; activeCacheKey = cacheKey; failedChunks = []; hideRetry();
-  startPlayer(title, job.audioUrl || src, "實際播放音訊 AI 轉錄（含廣告，背景處理中…）");
+  startPlayer(title, job.audioUrl || src, "實際播放音訊 AI 轉錄（含廣告，背景處理中…）", false);
   setMore("正在準備第一批雙語字幕…完成後即可開始", false);
   let okCount=0, firstErr=null;
   for(let i=0;i<job.count;i++){
@@ -786,6 +787,7 @@ async function runJob(job, title, src, cacheKey){
 
 async function reprocessCurrent(){
   if(!activeCacheKey || !currentSrc) return;
+  playingCachedAudio = false;
   localStorage.removeItem(activeCacheKey);
   runId++;
   audio.pause();
@@ -881,6 +883,7 @@ async function processEpisode(ep){
   }
   const cacheKey = CACHE_PREFIX+ep.audio+"_"+$("lang").value;
   activeCacheKey = cacheKey; currentTitle = ep.title; currentSrc = ep.audio; currentMode = "feed";
+  cachedAudioRecoveryInProgress = false;
   try{
     stage = "讀取上次結果";
     const cached = localStorage.getItem(cacheKey);
@@ -916,7 +919,7 @@ function absoluteUrl(url){
 }
 
 // 開啟播放器並備好一個空的字幕容器（內容由 appendSegments 逐段加入）
-function startPlayer(name, src, source){
+function startPlayer(name, src, source, fromCache=false){
   $("status").style.display="none"; $("setup").style.display="none";
   $("player").style.display="block"; $("nowbar").style.display="block";
   $("epName").textContent = name;
@@ -934,6 +937,7 @@ function startPlayer(name, src, source){
 
   $("cur").textContent="0:00"; $("dur").textContent="載入中";
   $("scrub").value=0;
+  playingCachedAudio=fromCache;
   audioReadyNotified=false;
   clearTimeout(readyToastTimer);
   $("readytoast").classList.remove("show");
@@ -1027,7 +1031,20 @@ audio.addEventListener("canplay", announceAudioReady);
 audio.addEventListener("canplaythrough", announceAudioReady);
 audio.addEventListener("error", ()=>{
   const code = audio.error ? audio.error.code : "?";
-  setMore("音訊載入失敗（錯誤碼 "+code+"）。這個 podcast 來源可能擋瀏覽器播放。", true);
+  if(playingCachedAudio && currentSrc && !cachedAudioRecoveryInProgress){
+    cachedAudioRecoveryInProgress=true;
+    playingCachedAudio=false;
+    setMore("上次的同步音訊已過期，正在自動重新準備…", false);
+    setTimeout(async ()=>{
+      try{
+        await reprocessCurrent();
+      }catch(err){
+        setMore("重新準備音訊失敗："+(err.message || err), true);
+      }
+    },250);
+    return;
+  }
+  setMore("音訊載入失敗（錯誤碼 "+code+"）。請重新選擇這一集；若仍失敗，可能是來源格式不相容。", true);
 });
 document.addEventListener("visibilitychange", ()=>{
   if(!document.hidden) document.title=defaultPageTitle;
