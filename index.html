@@ -1147,9 +1147,21 @@ function renderSegments(){
     if(state==="failed") failedSet.add(i);
   });
   failedSet.forEach(i=>{
-    if(Number.isFinite(starts[i])){
-      items.push({type:"failed", start:starts[i], end:chunkEnd(i), chunk:i});
-    }
+    if(!Number.isFinite(starts[i])) return;
+    const failedStart=starts[i], failedEnd=chunkEnd(i);
+    const coverage=segments
+      .map(s=>({
+        start:Math.max(failedStart,Number(s.start||0)),
+        end:Math.min(failedEnd,Number(s.end||s.start||0))
+      }))
+      .filter(r=>r.end>r.start)
+      .sort((a,b)=>a.start-b.start);
+    let cursor=failedStart;
+    coverage.forEach(r=>{
+      if(r.start-cursor>=4) items.push({type:"failed",start:cursor,end:r.start,chunk:i});
+      cursor=Math.max(cursor,r.end);
+    });
+    if(failedEnd-cursor>=4) items.push({type:"failed",start:cursor,end:failedEnd,chunk:i});
   });
 
   const lastEnd = segments.reduce((max,s)=>Math.max(max,Number(s.end||s.start||0)),0);
@@ -1175,9 +1187,8 @@ function renderSegments(){
       const detail=document.createElement("div");
       detail.className="gap-detail";
       if(item.type==="failed"){
-        title.textContent="這一段字幕處理失敗";
-        detail.textContent="約 "+fmt(item.start)+" 起的內容尚無字幕。背景處理完成後可單獨重試。";
-        d.addEventListener("click", ()=>{ if(failedChunks.length) retryFailedChunks(); });
+        title.textContent="音訊持續播放中，這段暫無字幕";
+        detail.textContent=fmt(item.start)+"–"+fmt(item.end)+" 的轉錄或翻譯尚未完成；播放不會跳過這段。";
       }else{
         title.textContent="後續字幕處理中";
         const progress = item.chunk>=0 && activeJob.count
