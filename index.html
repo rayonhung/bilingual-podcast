@@ -777,9 +777,10 @@ async function monitorBackgroundJob(backgroundJobId, title, src, cacheKey){
 
     if(state.audioJob && state.audioJob.jobId) activeJob=state.audioJob;
     const incoming=state.segments || [];
-    if(!playerStarted && activeJob && activeJob.audioUrl && (incoming.length || state.status==="done")){
+    if(!playerStarted && activeJob && activeJob.audioUrl){
       startPlayer(title, activeJob.audioUrl, "伺服器背景處理（實際播放音訊，含廣告）", false);
       playerStarted=true;
+      setMore("音訊已可先播放，雙語字幕由伺服器繼續背景處理…", false);
     }
     if(playerStarted && incoming.length) appendSegments(incoming);
     since=Number(state.totalSegments || since);
@@ -1025,9 +1026,22 @@ async function processEpisode(ep){
 // ---------- player ----------
 function fmt(s){ s=Math.max(0,s|0); return (s/60|0)+":"+String(s%60).padStart(2,"0"); }
 function audioSrc(src){
-  src = absoluteUrl(src);
-  if(/^https?:\/\//i.test(src)) return "/api/audio?url=" + encodeURIComponent(src);
-  return src;
+  if(!src) return "";
+  try{
+    const url = new URL(src, location.href);
+    // 背景工作下載好的同步音訊已經是本站端點，必須直接播放。
+    // 若再繞進 /api/audio 代理，內部請求不會帶瀏覽器的登入 Cookie，
+    // 會收到 401 JSON，Chrome/iOS 因而顯示「The operation is not supported」。
+    if(url.origin===location.origin && url.pathname==="/api/job_audio"){
+      return url.pathname + url.search;
+    }
+    if(/^https?:$/i.test(url.protocol)){
+      return "/api/audio?url=" + encodeURIComponent(url.href);
+    }
+    return url.href;
+  }catch(e){
+    return src;
+  }
 }
 
 function absoluteUrl(url){
@@ -1113,8 +1127,8 @@ function renderSegments(){
 const playBtn=$("playBtn"), playIconPath=document.querySelector("#playIcon path");
 const ICON_PLAY='M8 5v14l11-7z', ICON_PAUSE='M6 5h4v14H6zM14 5h4v14h-4z';
 playBtn.addEventListener("click", async ()=>{
-  if(!segments.length){
-    setMore("正在準備第一批雙語字幕…完成後即可開始", false);
+  if(!audio.getAttribute("src")){
+    setMore("同步音訊仍在準備中，完成後會自動通知。", false);
     return;
   }
   if(audio.paused){
@@ -1213,8 +1227,8 @@ $("reprocessBtn").addEventListener("click", reprocessCurrent);
 document.addEventListener("keydown", async e=>{
   if(e.code==="Space" && $("player").style.display==="block" && e.target.tagName!=="INPUT"){
     e.preventDefault();
-    if(!segments.length){
-      setMore("正在準備第一批雙語字幕…完成後即可開始", false);
+    if(!audio.getAttribute("src")){
+      setMore("同步音訊仍在準備中，完成後會自動通知。", false);
       return;
     }
     if(audio.paused){
