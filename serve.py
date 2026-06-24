@@ -422,6 +422,32 @@ def ffmpeg_duration(path):
         raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffprobe failed")
     return float(p.stdout.decode("utf-8", "replace").strip())
 
+def normalize_audio_for_playback(audio_bytes, filename):
+    """把來源音訊標準化成 Safari 穩定支援的 MP3，並讓播放與轉錄共用同一份檔案。"""
+    if not has_cmd("ffmpeg"):
+        return audio_bytes, filename
+    suffix = os.path.splitext(filename.split("?")[0])[1] or ".audio"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "source" + suffix)
+            out = os.path.join(td, "playback.mp3")
+            with open(src, "wb") as f:
+                f.write(audio_bytes)
+            p = subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", src, "-vn", "-ac", "2", "-ar", "44100", "-b:a", "96k", out,
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if p.returncode:
+                raise RuntimeError(p.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")
+            with open(out, "rb") as f:
+                normalized = f.read()
+            if normalized:
+                base = os.path.splitext(os.path.basename(filename.split("?")[0]))[0] or "podcast"
+                return normalized, base + ".mp3"
+    except Exception as e:
+        print("[job] 音訊標準化失敗，沿用原始格式：%s" % e, flush=True)
+    return audio_bytes, filename
+
 def ffmpeg_chunks(audio_bytes, filename, max_seconds=None, first_max_seconds=None, overlap_seconds=0):
     """
     用 ffmpeg 依真正時間切段並重編碼，避開 podcast MP3 metadata / VBR / frame parser 造成的開頭偏移。
@@ -663,6 +689,7 @@ def job_start(data):
     else:
         audio = http_get(data["audioUrl"], timeout=600, accept="audio/*,application/octet-stream,*/*")
         name = data["audioUrl"].split("?")[0].split("/")[-1] or "audio.mp3"
+    audio, name = normalize_audio_for_playback(audio, name)
     print("[job] 已下載 %.1f MB，開始切段…" % (len(audio) / 1024 / 1024), flush=True)
     chunks = split_audio(audio, name)
     if not chunks:

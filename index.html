@@ -100,6 +100,10 @@
   .seg.active .trans{opacity:1;color:var(--ink)}
 
   .jumpback{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:45;background:var(--ink);color:#fff;padding:9px 16px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.18);display:none;align-items:center;gap:7px;cursor:pointer}
+  .readytoast{position:fixed;left:50%;bottom:104px;transform:translate(-50%,16px);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:24px;font-size:13px;font-weight:650;box-shadow:0 8px 24px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap}
+  .readytoast.show{opacity:1;transform:translate(-50%,0)}
+  .play.ready{animation:readyPulse .8s ease 2}
+  @keyframes readyPulse{50%{box-shadow:0 0 0 9px rgba(31,122,107,.18);transform:scale(1.05)}}
   .err{background:#FBEEE7;border:1px solid #EBC9B6;color:var(--warn);padding:12px 14px;border-radius:10px;font-size:13px;margin-top:12px;display:none}
   .topactions{display:flex;justify-content:flex-end;padding:10px 0}
 
@@ -307,6 +311,7 @@
 </div>
 
 <div class="jumpback" id="jumpback">↓ 回到目前播放</div>
+<div class="readytoast" id="readytoast" role="status" aria-live="polite">音訊已就緒，可以播放</div>
 <audio id="audio"></audio>
 
 <script>
@@ -613,6 +618,8 @@ let activeJob = null, activeCacheKey = "", failedChunks = [];
 let runId = 0;
 let currentTitle = "", currentSrc = "", currentMode = "";
 let audio = $("audio");
+let audioReadyNotified = false, readyToastTimer = null;
+const defaultPageTitle = document.title;
 
 function setStatus(text, pct){
   $("setup").style.display="none";
@@ -927,12 +934,18 @@ function startPlayer(name, src, source){
 
   $("cur").textContent="0:00"; $("dur").textContent="載入中";
   $("scrub").value=0;
+  audioReadyNotified=false;
+  clearTimeout(readyToastTimer);
+  $("readytoast").classList.remove("show");
+  playBtn.classList.remove("ready");
+  document.title=defaultPageTitle;
   audio.pause();
   audio.removeAttribute("crossorigin");
   audio.removeAttribute("src");
   try{ audio.load(); }catch(e){}
   audio.preload = "metadata";
   audio.setAttribute("src", audioSrc(src));
+  try{ audio.load(); }catch(e){}
   lastActive=-1; autoScroll=true; $("jumpback").style.display="none";
 }
 
@@ -991,10 +1004,33 @@ playBtn.addEventListener("click", async ()=>{
 audio.addEventListener("play", ()=> playIconPath.setAttribute("d",ICON_PAUSE));
 audio.addEventListener("pause", ()=> playIconPath.setAttribute("d",ICON_PLAY));
 audio.addEventListener("loadedmetadata", ()=> $("dur").textContent=Number.isFinite(audio.duration)?fmt(audio.duration):"直播");
-audio.addEventListener("canplay", ()=> { if($("more").textContent.startsWith("音訊還沒載入")) setMore(""); });
+function announceAudioReady(){
+  if(audioReadyNotified) return;
+  audioReadyNotified=true;
+  const toast=$("readytoast");
+  toast.textContent="音訊已就緒，可以播放";
+  toast.classList.add("show");
+  playBtn.classList.add("ready");
+  clearTimeout(readyToastTimer);
+  readyToastTimer=setTimeout(()=>{
+    toast.classList.remove("show");
+    playBtn.classList.remove("ready");
+  },6000);
+  if($("more").textContent.startsWith("音訊還沒載入")) setMore("");
+  if(document.hidden) document.title="音訊好了｜雙語 Podcast";
+  if(navigator.vibrate) navigator.vibrate(120);
+  if(document.hidden && "Notification" in window && Notification.permission==="granted"){
+    try{ new Notification("雙語 Podcast", {body:"音訊已就緒，可以開始播放。"}); }catch(e){}
+  }
+}
+audio.addEventListener("canplay", announceAudioReady);
+audio.addEventListener("canplaythrough", announceAudioReady);
 audio.addEventListener("error", ()=>{
   const code = audio.error ? audio.error.code : "?";
   setMore("音訊載入失敗（錯誤碼 "+code+"）。這個 podcast 來源可能擋瀏覽器播放。", true);
+});
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden) document.title=defaultPageTitle;
 });
 
 let lastActive=-1, autoScroll=true;
