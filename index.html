@@ -115,11 +115,12 @@
   .play.ready{animation:readyPulse .8s ease 2}
   @keyframes readyPulse{50%{box-shadow:0 0 0 9px rgba(31,122,107,.18);transform:scale(1.05)}}
   .err{background:#FBEEE7;border:1px solid #EBC9B6;color:var(--warn);padding:12px 14px;border-radius:10px;font-size:13px;margin-top:12px;display:none}
-  .topactions{display:flex;justify-content:flex-end;padding:10px 0}
-
   .apphead{display:flex;align-items:center;gap:14px;padding:18px 0 14px;position:sticky;top:0;z-index:30;background:rgba(243,244,241,.94);backdrop-filter:blur(12px)}
   .apphead .brand{padding:0}
   .headcopy{margin-left:auto;color:var(--ink-faint);font-size:12px}
+  .headback{display:none;margin-left:auto;padding:8px 11px;background:#fff;border:1px solid var(--line);
+    color:var(--ink-soft);font-size:12.5px;white-space:nowrap}
+  .headback:hover{border-color:var(--ink-soft);color:var(--ink)}
   .access{padding:16px 18px}
   .access.unlocked{display:none}
   .browse{padding-bottom:110px}
@@ -194,7 +195,8 @@
 <div class="wrap">
   <header class="apphead">
     <div class="brand"><span class="dot"></span><h1>雙語 Podcast</h1></div>
-    <div class="headcopy">選一集，轉成你的私人雙語播放器</div>
+    <div class="headcopy" id="headCopy">選一集，轉成你的私人雙語播放器</div>
+    <button class="headback" id="backBtn" type="button">← 換一集</button>
   </header>
 
   <div id="setup">
@@ -302,7 +304,6 @@
 
   <!-- PLAYER -->
   <div id="player">
-    <div class="topactions"><button class="btn-ghost" id="backBtn">← 換一集</button></div>
     <div class="srcnote" id="srcnote"></div>
     <div class="more" id="more" style="display:none"></div>
     <button class="reprocessbtn" id="reprocessBtn">重新處理整集</button>
@@ -651,6 +652,8 @@ function setStatus(text, pct){
 }
 function backToSetup(){
   $("status").style.display="none"; $("player").style.display="none"; $("nowbar").style.display="none"; $("jumpback").style.display="none";
+  $("backBtn").style.display="none";
+  $("headCopy").style.display="";
   $("setup").style.display="block";
 }
 
@@ -1090,6 +1093,8 @@ function absoluteUrl(url){
 function startPlayer(name, src, source, fromCache=false){
   $("status").style.display="none"; $("setup").style.display="none";
   $("player").style.display="block"; $("nowbar").style.display="block";
+  $("backBtn").style.display="inline-flex";
+  $("headCopy").style.display="none";
   $("epName").textContent = name;
   $("srcnote").textContent = source ? ("字幕來源：" + source) : "";
   setMore("");
