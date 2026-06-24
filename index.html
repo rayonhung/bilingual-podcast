@@ -313,7 +313,7 @@
 const $ = id => document.getElementById(id);
 const CHUNK_TIMEOUT_MS = 180000;
 const RETRY_CHUNK_TIMEOUT_MS = 420000;
-const CACHE_PREFIX = "tx_v7_";
+const CACHE_PREFIX = "tx_v8_synced_audio_";
 let appConfig = {serverKey:false, passwordRequired:false, authed:false};
 async function parseApiResponse(r){
   const text = await r.text();
@@ -595,7 +595,8 @@ function renderEpisodes(eps){
     const meta = document.createElement("div");
     meta.className = "episode-meta";
     const date = (ep.date||"").replace(/\s*\+?\d{4}.*$/,"");
-    meta.textContent = [date, ep.duration, ep.transcript?"附官方字幕":"AI 轉錄"].filter(Boolean).join(" · ");
+    const duration = /^\d+$/.test(ep.duration || "") ? fmt(Number(ep.duration)) : ep.duration;
+    meta.textContent = [date, duration, "同步 AI 轉錄"].filter(Boolean).join(" · ");
     const action = document.createElement("button");
     action.className = "episode-action";
     action.textContent = "雙語播放";
@@ -700,8 +701,12 @@ function pruneResolvedFailures(job=activeJob){
 function restoreCached(raw, title, src, cacheKey){
   const data = JSON.parse(raw);
   const segs = Array.isArray(data) ? data : (data.segments || []);
+  if(!Array.isArray(data) && (!data.job || !data.job.audioUrl || Date.now() - (data.savedAt || 0) > 25*60*1000)){
+    localStorage.removeItem(cacheKey);
+    return false;
+  }
   activeCacheKey = cacheKey || activeCacheKey;
-  startPlayer(title, src, "讀取上次的結果");
+  startPlayer(title, Array.isArray(data) ? src : data.job.audioUrl, "讀取上次的同步結果");
   appendSegments(segs);
   if(Array.isArray(data)){
     showReprocess("這是舊版快取，沒有保存失敗段落清單；點此重新處理一次。");
@@ -713,6 +718,7 @@ function restoreCached(raw, title, src, cacheKey){
       showRetry("上次有 "+failedChunks.length+" 段失敗 · 點此只重試失敗段落");
     }
   }
+  return true;
 }
 
 // 逐段交付：第一段好了就開播放器，其餘段在背景補上
@@ -720,7 +726,7 @@ async function runJob(job, title, src, cacheKey){
   const key=groqKey(), model=$("quality").value;
   const myRun = ++runId;
   activeJob = job; activeCacheKey = cacheKey; failedChunks = []; hideRetry();
-  startPlayer(title, src, "AI 轉錄（背景處理中…）");
+  startPlayer(title, job.audioUrl || src, "實際播放音訊 AI 轉錄（含廣告，背景處理中…）");
   setMore("正在準備第一批雙語字幕…完成後即可開始", false);
   let okCount=0, firstErr=null;
   for(let i=0;i<job.count;i++){
@@ -756,18 +762,18 @@ async function runJob(job, title, src, cacheKey){
   if(!failedChunks.length){
     persist(cacheKey);
     setMore("");
-    $("srcnote").textContent = "字幕來源：AI 轉錄（共 "+job.count+" 段）";
+    $("srcnote").textContent = "字幕來源：實際播放音訊 AI 轉錄（含廣告，共 "+job.count+" 段）";
   }else{
     pruneResolvedFailures(job);
     if(!failedChunks.length){
       persist(cacheKey);
       setMore("");
-      $("srcnote").textContent = "字幕來源：AI 轉錄（共 "+job.count+" 段）";
+      $("srcnote").textContent = "字幕來源：實際播放音訊 AI 轉錄（含廣告，共 "+job.count+" 段）";
       return;
     }
     showRetry("完成，但有 "+failedChunks.length+" 段失敗 · 點此只重試失敗段落");
     persist(cacheKey);
-    $("srcnote").textContent = "字幕來源：AI 轉錄";
+    $("srcnote").textContent = "字幕來源：實際播放音訊 AI 轉錄（含廣告）";
   }
 }
 
@@ -871,32 +877,16 @@ async function processEpisode(ep){
   try{
     stage = "讀取上次結果";
     const cached = localStorage.getItem(cacheKey);
-    if(cached){ restoreCached(cached, ep.title, ep.audio, cacheKey); return; }
+    if(cached && restoreCached(cached, ep.title, ep.audio, cacheKey)) return;
   }catch(e){}
   try{
-    if(ep.transcript){
-      // 有現成字幕：一次抓完、一次翻完（很快，不必分段）
-      stage = "讀取節目字幕";
-      setStatus("讀取節目附的字幕…（這集不用轉錄，超快）", null);
-      const r = await api("/api/transcript", {url:ep.transcript, type:ep.transcriptType});
-      const segs = r.segments;
-      if(!segs || !segs.length) throw new Error("字幕檔是空的，改用轉錄試試。");
-      stage = "開啟播放器";
-      startPlayer(ep.title, ep.audio, "用節目附的字幕（翻譯中…）");
-      setMore("字幕翻譯完成後即可播放", false);
-      stage = "翻譯字幕";
-      await translateSegs(segs, (t)=>setMore(t), (chunk)=>appendSegments(chunk));
-      setMore("");
-      $("srcnote").textContent = "字幕來源：用節目附的字幕";
-      persist(cacheKey);
-    }else{
-      // 需轉錄：下載＋切段，再逐段交付
-      stage = "下載並準備音檔";
-      setStatus("準備音檔…（下載＋分段）", null);
-      const job = await startFeedJob(ep.audio);
-      stage = "開啟播放器與轉錄";
-      await runJob(job, ep.title, ep.audio, cacheKey);
-    }
+    // 一律轉錄實際下載並播放的同一份音訊。Podcast 的動態廣告通常不在官方字幕內，
+    // 若直接套官方字幕，廣告之後的整條時間軸都會錯位。
+    stage = "下載並準備同步音檔";
+    setStatus("準備同步音檔…（廣告也會一起轉錄）", null);
+    const job = await startFeedJob(ep.audio);
+    stage = "開啟播放器與轉錄";
+    await runJob(job, ep.title, ep.audio, cacheKey);
   }catch(err){
     backToSetup();
     showErr(stage+"失敗："+(err && err.message ? err.message : String(err)));
